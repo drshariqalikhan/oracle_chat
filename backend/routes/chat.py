@@ -6,6 +6,7 @@ from backend.config import get_settings
 from backend.llm.base import LLMProviderError
 from backend.llm.openrouter import OpenRouterProvider
 from backend.models import ChatHistoryResponse, ChatRequest, ChatResponse
+from backend.services.file_service import FileService, FileValidationError
 from backend.services.image_service import ImageService, ImageValidationError
 from backend.services.memory_service import MemoryService
 
@@ -20,6 +21,7 @@ _pinned_vision_model: str | None = None
 
 memory_service = MemoryService(max_messages=40)
 image_service = ImageService(uploads_dir=UPLOADS_DIR)
+file_service = FileService(uploads_dir=UPLOADS_DIR)
 
 
 @router.get("/chat/pinned-model")
@@ -77,7 +79,6 @@ async def chat(payload: ChatRequest) -> ChatResponse:
         base_url=settings.openrouter_base_url,
     )
 
-    prior_messages = memory_service.get_history(session_id)
     is_vision = bool(payload.image_id)
     image_data_url: str | None = None
 
@@ -87,22 +88,65 @@ async def chat(payload: ChatRequest) -> ChatResponse:
         except ImageValidationError as exc:
             raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
 
+    if payload.document_id:
+        try:
+            doc_text, _, _ = file_service.extract_text_by_id(payload.document_id)
+        except FileValidationError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+
+        doc_display_name = payload.document_name or payload.document_id
+        memory_service.attach_document(
+            session_id=session_id,
+            file_id=payload.document_id,
+            filename=doc_display_name,
+            text=doc_text,
+        )
+
+    prior_messages = memory_service.get_history(session_id)
+    documents_context = memory_service.get_documents_context(session_id)
+    has_document_context = bool(documents_context)
+
     async def run_inference(target_model: str):
         if is_vision and image_data_url is not None:
+            vision_history = list(prior_messages)
+            if documents_context:
+                vision_history = [
+                    {
+                        "role": "user",
+                        "content": f"Uploaded document context:\n\n{documents_context}",
+                    },
+                    *vision_history,
+                ]
             return await provider.analyze_image(
                 prompt=payload.message,
                 image_data_url=image_data_url,
+                history=vision_history,
+                model=target_model,
+            )
+
+        if documents_context:
+            return await provider.process_document(
+                prompt=payload.message,
+                document_context=documents_context,
                 history=prior_messages,
                 model=target_model,
             )
+
         return await provider.chat(
             messages=[*prior_messages, {"role": "user", "content": payload.message}],
             model=target_model,
         )
 
+    memory_prefixes: list[str] = []
+    if payload.image_id:
+        memory_prefixes.append(f"[Uploaded image: {payload.image_id}]")
+    if payload.document_id:
+        memory_prefixes.append(
+            f"[Uploaded document: {payload.document_name or payload.document_id}]"
+        )
     memory_user_text = (
-        f"[Uploaded image: {payload.image_id}] {payload.message}"
-        if payload.image_id
+        f"{' '.join(memory_prefixes)} {payload.message}"
+        if memory_prefixes
         else payload.message
     )
 
@@ -151,6 +195,7 @@ async def chat(payload: ChatRequest) -> ChatResponse:
             model=result.model,
             pinned=bool(_pinned_vision_model if is_vision else _pinned_free_model),
             vision_used=is_vision,
+            document_used=has_document_context,
         )
 
     try:
@@ -171,4 +216,5 @@ async def chat(payload: ChatRequest) -> ChatResponse:
         model=result.model,
         pinned=False,
         vision_used=is_vision,
+        document_used=has_document_context,
     )

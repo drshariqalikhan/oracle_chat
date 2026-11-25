@@ -116,6 +116,29 @@ class OpenRouterProvider(LLMProvider):
         messages = [*(history or []), multimodal_message]
         return await self.chat(messages=messages, model=model, **kwargs)
 
+    async def process_document(
+        self,
+        prompt: str,
+        document_context: str,
+        history: list[dict[str, Any]] | None = None,
+        model: str | None = None,
+        **kwargs: Any,
+    ) -> LLMResponse:
+        context_instruction = {
+            "role": "user",
+            "content": (
+                "Use the following uploaded document content to answer the user's questions accurately. "
+                "If the answer is not in the document, say so clearly.\n\n"
+                f"{document_context}"
+            ),
+        }
+        messages = [
+            context_instruction,
+            *(history or []),
+            {"role": "user", "content": prompt},
+        ]
+        return await self.chat(messages=messages, model=model, **kwargs)
+
     @staticmethod
     def _extract_error_detail(response: httpx.Response) -> str:
         try:

@@ -38,3 +38,15 @@ class LLMProvider(ABC):
     ) -> LLMResponse:
         """Analyze an image using a multimodal model and return an LLMResponse."""
         raise NotImplementedError
+
+    @abstractmethod
+    async def process_document(
+        self,
+        prompt: str,
+        document_context: str,
+        history: list[dict[str, Any]] | None = None,
+        model: str | None = None,
+        **kwargs: Any,
+    ) -> LLMResponse:
+        """Answer a prompt grounded in extracted document text."""
+        raise NotImplementedError

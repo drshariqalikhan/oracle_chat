@@ -11,6 +11,9 @@ const DEFAULT_SETTINGS = {
     ollamaModel: "",
 };
 
+const IMAGE_EXTENSIONS = [".jpg", ".jpeg", ".png", ".webp"];
+const DOC_EXTENSIONS = [".pdf", ".txt"];
+
 // DOM Elements - Chat
 const chatView = document.getElementById("chat-view");
 const settingsView = document.getElementById("settings-view");
@@ -22,11 +25,12 @@ const sendButton = document.getElementById("send-button");
 const providerBadge = document.getElementById("provider-badge");
 const newChatBtn = document.getElementById("new-chat-btn");
 
-// DOM Elements - Image Attachment
-const imageFileInput = document.getElementById("image-file-input");
-const attachImageBtn = document.getElementById("attach-image-btn");
+// DOM Elements - Attachment
+const attachmentFileInput = document.getElementById("attachment-file-input");
+const attachFileBtn = document.getElementById("attach-file-btn");
 const attachmentPreview = document.getElementById("attachment-preview");
 const attachmentThumb = document.getElementById("attachment-thumb");
+const attachmentDocBadge = document.getElementById("attachment-doc-badge");
 const attachmentName = document.getElementById("attachment-name");
 const attachmentDetails = document.getElementById("attachment-details");
 const removeAttachmentBtn = document.getElementById("remove-attachment-btn");
@@ -69,7 +73,7 @@ const logEntries = [];
 let activeLogFilter = "all";
 let isSending = false;
 let isUploading = false;
-let pendingImage = null;
+let pendingAttachment = null; // { kind: "image" | "document", data: ... }
 
 // ---------------------------
 // Event & Error Logging
@@ -217,7 +221,7 @@ async function startNewChat() {
         // Ignore storage errors
     }
 
-    clearPendingImage();
+    clearPendingAttachment();
     chatHistory.innerHTML = "";
     chatHistory.appendChild(emptyStateTemplate.cloneNode(true));
     closeSettingsPage();
@@ -461,12 +465,15 @@ async function clearPinnedModel() {
 }
 
 // ---------------------------
-// Image Upload & Attachment Preview
+// Image & Document Upload Preview
 // ---------------------------
-function clearPendingImage() {
-    pendingImage = null;
-    imageFileInput.value = "";
+function clearPendingAttachment() {
+    pendingAttachment = null;
+    attachmentFileInput.value = "";
     attachmentThumb.src = "";
+    attachmentThumb.classList.add("hidden");
+    attachmentDocBadge.textContent = "DOC";
+    attachmentDocBadge.classList.add("hidden");
     attachmentName.textContent = "";
     attachmentDetails.textContent = "";
     attachmentPreview.classList.add("hidden");
@@ -474,33 +481,67 @@ function clearPendingImage() {
 }
 
 function showPendingImage(imageInfo) {
-    pendingImage = imageInfo;
+    pendingAttachment = { kind: "image", data: imageInfo };
+    attachmentDocBadge.classList.add("hidden");
     attachmentThumb.src = imageInfo.url;
+    attachmentThumb.classList.remove("hidden");
     attachmentName.textContent = imageInfo.original_filename;
     attachmentDetails.textContent = `${imageInfo.width}x${imageInfo.height} · ${formatBytes(imageInfo.size_bytes)}`;
     attachmentPreview.classList.remove("hidden");
     updateSendButtonState();
 }
 
-async function handleImageSelected(file) {
+function showPendingDocument(docInfo) {
+    pendingAttachment = { kind: "document", data: docInfo };
+    attachmentThumb.classList.add("hidden");
+    attachmentThumb.src = "";
+    attachmentDocBadge.textContent = (docInfo.file_type || "DOC").toUpperCase();
+    attachmentDocBadge.classList.remove("hidden");
+    attachmentName.textContent = docInfo.original_filename;
+    const truncNote = docInfo.truncated ? " · truncated" : "";
+    attachmentDetails.textContent = `${docInfo.page_count} page(s) · ${docInfo.char_count.toLocaleString()} chars · ${formatBytes(docInfo.size_bytes)}${truncNote}`;
+    attachmentPreview.classList.remove("hidden");
+    updateSendButtonState();
+}
+
+function getFileExtension(filename) {
+    const idx = filename.lastIndexOf(".");
+    return idx >= 0 ? filename.slice(idx).toLowerCase() : "";
+}
+
+async function handleAttachmentSelected(file) {
     if (!file || isUploading || isSending) {
         return;
     }
 
+    const ext = getFileExtension(file.name);
+    const isImage = IMAGE_EXTENSIONS.includes(ext) || file.type.startsWith("image/");
+    const isDoc = DOC_EXTENSIONS.includes(ext);
+
+    if (!isImage && !isDoc) {
+        const msg = `Unsupported file "${file.name}". Allowed: JPG, JPEG, PNG, WEBP, PDF, TXT.`;
+        appendMessage("assistant", msg, "error");
+        addLog("ERROR", "UPLOAD", msg);
+        attachmentFileInput.value = "";
+        return;
+    }
+
+    const endpoint = isDoc ? "/upload/document" : "/upload/image";
     isUploading = true;
-    attachImageBtn.disabled = true;
+    attachFileBtn.disabled = true;
     updateSendButtonState();
-    addLog("INFO", "UPLOAD", "Uploading image...", {
+
+    addLog("INFO", "UPLOAD", `Uploading ${isDoc ? "document" : "image"}...`, {
         filename: file.name,
         size: file.size,
-        type: file.type,
+        endpoint,
     });
 
     try {
         const formData = new FormData();
         formData.append("file", file);
 
-        const response = await fetch("/upload/image", {
+        const response = await fetch(endpoint, {
             method: "POST",
             body: formData,
         });
@@ -516,20 +557,31 @@ async function handleImageSelected(file) {
             throw new Error(extractApiErrorMessage(data, response.status));
         }
 
-        showPendingImage(data);
-        addLog("INFO", "UPLOAD", "Image uploaded and stored.", {
-            fileId: data.file_id,
-            url: data.url,
-            dimensions: `${data.width}x${data.height}`,
-            sizeBytes: data.size_bytes,
-        });
+        if (isDoc) {
+            showPendingDocument(data);
+            addLog("INFO", "UPLOAD", "Document uploaded & text extracted.", {
+                fileId: data.file_id,
+                fileType: data.file_type,
+                pages: data.page_count,
+                chars: data.char_count,
+                truncated: data.truncated,
+            });
+        } else {
+            showPendingImage(data);
+            addLog("INFO", "UPLOAD", "Image uploaded and stored.", {
+                fileId: data.file_id,
+                url: data.url,
+                dimensions: `${data.width}x${data.height}`,
+                sizeBytes: data.size_bytes,
+            });
+        }
     } catch (err) {
-        clearPendingImage();
-        appendMessage("assistant", `Image upload failed: ${err.message}`, "error");
-        addLog("ERROR", "UPLOAD", "Image upload failed.", err.message);
+        clearPendingAttachment();
+        appendMessage("assistant", `Upload failed: ${err.message}`, "error");
+        addLog("ERROR", "UPLOAD", "File upload failed.", err.message);
     } finally {
         isUploading = false;
-        attachImageBtn.disabled = false;
+        attachFileBtn.disabled = false;
         updateSendButtonState();
     }
 }
@@ -539,8 +591,8 @@ async function handleImageSelected(file) {
 // ---------------------------
 function updateSendButtonState() {
     const hasText = messageInput.value.trim().length > 0;
-    const hasImage = Boolean(pendingImage);
-    sendButton.disabled = isSending || isUploading || (!hasText && !hasImage);
+    const hasAttachment = Boolean(pendingAttachment);
+    sendButton.disabled = isSending || isUploading || (!hasText && !hasAttachment);
 }
 
 function autoResizeInput() {
@@ -552,7 +604,7 @@ function scrollToBottom() {
     chatHistory.scrollTop = chatHistory.scrollHeight;
 }
 
-function appendMessage(role, text, extraClass = "", imageInfo = null) {
+function appendMessage(role, text, extraClass = "", attachment = null) {
     const emptyEl = document.getElementById("empty-state");
     if (emptyEl && emptyEl.parentNode) {
         emptyEl.remove();
@@ -568,17 +620,31 @@ function appendMessage(role, text, extraClass = "", imageInfo = null) {
     const bubble = document.createElement("div");
     bubble.className = extraClass ? `message-bubble ${extraClass}` : "message-bubble";
 
-    if (imageInfo && imageInfo.url) {
+    if (attachment && attachment.kind === "image" && attachment.data.url) {
         const img = document.createElement("img");
         img.className = "chat-image-preview";
-        img.src = imageInfo.url;
-        img.alt = imageInfo.original_filename || "Uploaded image";
+        img.src = attachment.data.url;
+        img.alt = attachment.data.original_filename || "Uploaded image";
         bubble.appendChild(img);
 
         const caption = document.createElement("span");
         caption.className = "chat-image-caption";
-        caption.textContent = `${imageInfo.original_filename} (${imageInfo.width}x${imageInfo.height})`;
+        caption.textContent = `${attachment.data.original_filename} (${attachment.data.width}x${attachment.data.height})`;
         bubble.appendChild(caption);
+    } else if (attachment && attachment.kind === "document") {
+        const pill = document.createElement("div");
+        pill.className = "chat-doc-pill";
+
+        const tag = document.createElement("span");
+        tag.className = "chat-doc-tag";
+        tag.textContent = attachment.data.file_type || "DOC";
+
+        const name = document.createElement("span");
+        name.textContent = `${attachment.data.original_filename} (${attachment.data.page_count}p · ${attachment.data.char_count.toLocaleString()} chars)`;
+
+        pill.appendChild(tag);
+        pill.appendChild(name);
+        bubble.appendChild(pill);
     }
 
     if (text) {
@@ -612,60 +678,72 @@ async function handleSend(event) {
     event.preventDefault();
 
     const rawText = messageInput.value.trim();
-    const attachedImage = pendingImage;
+    const attached = pendingAttachment;
 
-    if ((!rawText && !attachedImage) || isSending || isUploading) {
+    if ((!rawText && !attached) || isSending || isUploading) {
         return;
     }
 
-    const promptText = rawText || "Describe this image in detail.";
+    const isVision = Boolean(attached && attached.kind === "image");
+    const isDocument = Boolean(attached && attached.kind === "document");
+
+    let promptText = rawText;
+    if (!promptText) {
+        promptText = isVision
+            ? "Describe this image in detail."
+            : "Summarize this document and list its key points.";
+    }
 
     if (currentSettings.provider === "ollama") {
-        appendMessage("user", rawText || promptText, "", attachedImage);
+        appendMessage("user", promptText, "", attached);
         messageInput.value = "";
         autoResizeInput();
-        clearPendingImage();
+        clearPendingAttachment();
         updateSendButtonState();
         appendMessage(
             "assistant",
-            "Ollama chat & vision inference is scheduled for Milestone 9. Please switch provider to OpenRouter in Settings to analyze images now.",
+            "Ollama inference is scheduled for Milestone 9. Please switch provider to OpenRouter in Settings to chat or analyze files now.",
             "error"
         );
         addLog("WARN", "CHAT", "Blocked send while Ollama selected (Ollama chat lands in Milestone 9).");
         return;
     }
 
-    appendMessage("user", rawText || (attachedImage ? "Describe this image in detail." : ""), "", attachedImage);
+    appendMessage("user", promptText, "", attached);
     messageInput.value = "";
     autoResizeInput();
-    if (attachedImage) {
-        clearPendingImage();
+    if (attached) {
+        clearPendingAttachment();
     }
 
     isSending = true;
     updateSendButtonState();
 
     const routerModel = currentSettings.openrouterModel || DEFAULT_SETTINGS.openrouterModel;
-    const isVision = Boolean(attachedImage);
     const activePin = isVision
         ? currentSettings.pinnedVisionModel
         : currentSettings.pinnedOpenRouterModel;
     const effectiveDisplay =
         routerModel === "openrouter/free" && activePin ? activePin : routerModel;
 
-    const pendingBubble = appendMessage(
-        "assistant",
-        isVision ? `Analyzing image (${effectiveDisplay})...` : `Thinking (${effectiveDisplay})...`,
-        "pending"
-    );
+    const statusText = isVision
+        ? `Analyzing image (${effectiveDisplay})...`
+        : isDocument
+          ? `Reading document (${effectiveDisplay})...`
+          : `Thinking (${effectiveDisplay})...`;
+    const pendingBubble = appendMessage("assistant", statusText, "pending");
 
     const requestBody = {
         message: promptText,
         session_id: currentSessionId,
         model: routerModel,
     };
-    if (attachedImage) {
-        requestBody.image_id = attachedImage.file_id;
+    if (isVision) {
+        requestBody.image_id = attached.data.file_id;
+    }
+    if (isDocument) {
+        requestBody.document_id = attached.data.file_id;
+        requestBody.document_name = attached.data.original_filename;
     }
     if (routerModel === "openrouter/free") {
         if (isVision && currentSettings.pinnedVisionModel) {
@@ -678,12 +756,15 @@ async function handleSend(event) {
         requestBody.api_key = currentSettings.openrouterApiKey;
     }
 
-    addLog("INFO", isVision ? "VISION" : "CHAT", "POST /chat request sent.", {
+    const logSource = isVision ? "VISION" : isDocument ? "DOCUMENT" : "CHAT";
+    addLog("INFO", logSource, "POST /chat request sent.", {
         sessionId: currentSessionId,
         provider: "openrouter",
         model: routerModel,
         vision: isVision,
-        imageId: attachedImage ? attachedImage.file_id : null,
+        document: isDocument,
+        imageId: requestBody.image_id || null,
+        documentId: requestBody.document_id || null,
         pinnedModel: activePin || null,
         usingUiApiKey: Boolean(currentSettings.openrouterApiKey),
     });
@@ -732,18 +813,19 @@ async function handleSend(event) {
 
         pendingBubble.classList.remove("pending");
         pendingBubble.textContent = data.reply ?? "";
-        addLog("INFO", data.vision_used ? "VISION" : "CHAT", "Received OpenRouter reply.", {
+        addLog("INFO", logSource, "Received OpenRouter reply.", {
             sessionId: data.session_id,
             historyLength: data.history_length,
             model: data.model || effectiveDisplay,
             pinned: Boolean(data.pinned),
             visionUsed: Boolean(data.vision_used),
+            documentUsed: Boolean(data.document_used),
         });
     } catch (err) {
         pendingBubble.classList.remove("pending");
         pendingBubble.classList.add("error");
         pendingBubble.textContent = `Error: ${err.message}`;
-        addLog("ERROR", isVision ? "VISION" : "CHAT", "OpenRouter request failed.", err.message);
+        addLog("ERROR", logSource, "OpenRouter request failed.", err.message);
     } finally {
         isSending = false;
         updateSendButtonState();
@@ -769,24 +851,29 @@ messageInput.addEventListener("keydown", (event) => {
     }
 });
 
-attachImageBtn.addEventListener("click", () => {
+attachFileBtn.addEventListener("click", () => {
     if (!isUploading && !isSending) {
-        imageFileInput.click();
+        attachmentFileInput.click();
     }
 });
 
-imageFileInput.addEventListener("change", () => {
-    const file = imageFileInput.files && imageFileInput.files[0];
+attachmentFileInput.addEventListener("change", () => {
+    const file = attachmentFileInput.files && attachmentFileInput.files[0];
     if (file) {
-        handleImageSelected(file);
+        handleAttachmentSelected(file);
     }
 });
 
 removeAttachmentBtn.addEventListener("click", () => {
-    if (pendingImage) {
-        addLog("INFO", "UPLOAD", "Removed attached image before sending.", pendingImage.original_filename);
+    if (pendingAttachment) {
+        addLog(
+            "INFO",
+            "UPLOAD",
+            `Removed attached ${pendingAttachment.kind} before sending.`,
+            pendingAttachment.data.original_filename
+        );
     }
-    clearPendingImage();
+    clearPendingAttachment();
 });
 
 chatForm.addEventListener("submit", handleSend);
