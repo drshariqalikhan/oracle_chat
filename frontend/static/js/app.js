@@ -21,6 +21,15 @@ const sendButton = document.getElementById("send-button");
 const providerBadge = document.getElementById("provider-badge");
 const newChatBtn = document.getElementById("new-chat-btn");
 
+// DOM Elements - Image Attachment
+const imageFileInput = document.getElementById("image-file-input");
+const attachImageBtn = document.getElementById("attach-image-btn");
+const attachmentPreview = document.getElementById("attachment-preview");
+const attachmentThumb = document.getElementById("attachment-thumb");
+const attachmentName = document.getElementById("attachment-name");
+const attachmentDetails = document.getElementById("attachment-details");
+const removeAttachmentBtn = document.getElementById("remove-attachment-btn");
+
 // DOM Elements - Settings
 const settingsBtn = document.getElementById("settings-btn");
 const backToChatBtn = document.getElementById("back-to-chat-btn");
@@ -57,6 +66,8 @@ let currentSessionId = loadOrCreateSessionId();
 const logEntries = [];
 let activeLogFilter = "all";
 let isSending = false;
+let isUploading = false;
+let pendingImage = null;
 
 // ---------------------------
 // Event & Error Logging
@@ -192,7 +203,7 @@ function loadOrCreateSessionId() {
 }
 
 async function startNewChat() {
-    if (isSending) {
+    if (isSending || isUploading) {
         return;
     }
 
@@ -204,6 +215,7 @@ async function startNewChat() {
         // Ignore storage errors
     }
 
+    clearPendingImage();
     chatHistory.innerHTML = "";
     chatHistory.appendChild(emptyStateTemplate.cloneNode(true));
     closeSettingsPage();
@@ -346,7 +358,14 @@ function formatBytes(bytes) {
         return "";
     }
     const gb = bytes / (1024 ** 3);
-    return gb >= 1 ? `${gb.toFixed(1)} GB` : `${(bytes / (1024 ** 2)).toFixed(0)} MB`;
+    if (gb >= 1) {
+        return `${gb.toFixed(1)} GB`;
+    }
+    const mb = bytes / (1024 ** 2);
+    if (mb >= 1) {
+        return `${mb.toFixed(1)} MB`;
+    }
+    return `${Math.max(1, Math.round(bytes / 1024))} KB`;
 }
 
 async function discoverOllamaModels() {
@@ -437,10 +456,86 @@ async function clearPinnedModel() {
 }
 
 // ---------------------------
+// Image Upload & Attachment Preview
+// ---------------------------
+function clearPendingImage() {
+    pendingImage = null;
+    imageFileInput.value = "";
+    attachmentThumb.src = "";
+    attachmentName.textContent = "";
+    attachmentDetails.textContent = "";
+    attachmentPreview.classList.add("hidden");
+    updateSendButtonState();
+}
+
+function showPendingImage(imageInfo) {
+    pendingImage = imageInfo;
+    attachmentThumb.src = imageInfo.url;
+    attachmentName.textContent = imageInfo.original_filename;
+    attachmentDetails.textContent = `${imageInfo.width}x${imageInfo.height} · ${formatBytes(imageInfo.size_bytes)}`;
+    attachmentPreview.classList.remove("hidden");
+    updateSendButtonState();
+}
+
+async function handleImageSelected(file) {
+    if (!file || isUploading || isSending) {
+        return;
+    }
+
+    isUploading = true;
+    attachImageBtn.disabled = true;
+    updateSendButtonState();
+    addLog("INFO", "UPLOAD", "Uploading image...", {
+        filename: file.name,
+        size: file.size,
+        type: file.type,
+    });
+
+    try {
+        const formData = new FormData();
+        formData.append("file", file);
+
+        const response = await fetch("/upload/image", {
+            method: "POST",
+            body: formData,
+        });
+
+        let data = null;
+        try {
+            data = await response.json();
+        } catch (parseErr) {
+            throw new Error(`Invalid JSON response (HTTP ${response.status})`);
+        }
+
+        if (!response.ok) {
+            throw new Error(extractApiErrorMessage(data, response.status));
+        }
+
+        showPendingImage(data);
+        addLog("INFO", "UPLOAD", "Image uploaded and stored.", {
+            fileId: data.file_id,
+            url: data.url,
+            dimensions: `${data.width}x${data.height}`,
+            sizeBytes: data.size_bytes,
+        });
+    } catch (err) {
+        clearPendingImage();
+        appendMessage("assistant", `Image upload failed: ${err.message}`, "error");
+        addLog("ERROR", "UPLOAD", "Image upload failed.", err.message);
+    } finally {
+        isUploading = false;
+        attachImageBtn.disabled = false;
+        updateSendButtonState();
+    }
+}
+
+// ---------------------------
 // Chat UI & Backend Integration
 // ---------------------------
 function updateSendButtonState() {
-    sendButton.disabled = isSending || messageInput.value.trim().length === 0;
+    const hasText = messageInput.value.trim().length > 0;
+    const hasImage = Boolean(pendingImage);
+    sendButton.disabled = isSending || isUploading || (!hasText && !hasImage);
 }
 
 function autoResizeInput() {
@@ -452,7 +547,7 @@ function scrollToBottom() {
     chatHistory.scrollTop = chatHistory.scrollHeight;
 }
 
-function appendMessage(role, text, extraClass = "") {
+function appendMessage(role, text, extraClass = "", imageInfo = null) {
     const emptyEl = document.getElementById("empty-state");
     if (emptyEl && emptyEl.parentNode) {
         emptyEl.remove();
@@ -467,7 +562,25 @@ function appendMessage(role, text, extraClass = "") {
 
     const bubble = document.createElement("div");
     bubble.className = extraClass ? `message-bubble ${extraClass}` : "message-bubble";
-    bubble.textContent = text;
+
+    if (imageInfo && imageInfo.url) {
+        const img = document.createElement("img");
+        img.className = "chat-image-preview";
+        img.src = imageInfo.url;
+        img.alt = imageInfo.original_filename || "Uploaded image";
+        bubble.appendChild(img);
+
+        const caption = document.createElement("span");
+        caption.className = "chat-image-caption";
+        caption.textContent = `${imageInfo.original_filename} (${imageInfo.width}x${imageInfo.height})`;
+        bubble.appendChild(caption);
+    }
+
+    if (text) {
+        const textNode = document.createElement("div");
+        textNode.textContent = text;
+        bubble.appendChild(textNode);
+    }
 
     row.appendChild(roleLabel);
     row.appendChild(bubble);
@@ -494,7 +607,27 @@ async function handleSend(event) {
     event.preventDefault();
 
     const text = messageInput.value.trim();
-    if (!text || isSending) {
+    const attachedImage = pendingImage;
+
+    if ((!text && !attachedImage) || isSending || isUploading) {
+        return;
+    }
+
+    if (attachedImage) {
+        appendMessage("user", text, "", attachedImage);
+        messageInput.value = "";
+        autoResizeInput();
+        clearPendingImage();
+
+        appendMessage(
+            "assistant",
+            `Image "${attachedImage.original_filename}" (${attachedImage.width}x${attachedImage.height}) uploaded and displayed in chat. Vision analysis will be connected in Milestone 6.`
+        );
+        addLog("INFO", "CHAT", "Displayed uploaded image inside chat flow.", {
+            fileId: attachedImage.file_id,
+            url: attachedImage.url,
+        });
+        messageInput.focus();
         return;
     }
 
@@ -619,6 +752,26 @@ messageInput.addEventListener("keydown", (event) => {
             chatForm.requestSubmit();
         }
     }
+});
+
+attachImageBtn.addEventListener("click", () => {
+    if (!isUploading && !isSending) {
+        imageFileInput.click();
+    }
+});
+
+imageFileInput.addEventListener("change", () => {
+    const file = imageFileInput.files && imageFileInput.files[0];
+    if (file) {
+        handleImageSelected(file);
+    }
+});
+
+removeAttachmentBtn.addEventListener("click", () => {
+    if (pendingImage) {
+        addLog("INFO", "UPLOAD", "Removed attached image before sending.", pendingImage.original_filename);
+    }
+    clearPendingImage();
 });
 
 chatForm.addEventListener("submit", handleSend);

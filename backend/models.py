@@ -28,3 +28,14 @@ class ChatResponse(BaseModel):
 class ChatHistoryResponse(BaseModel):
     session_id: str
     messages: list[dict[str, str]]
+
+
+class ImageUploadResponse(BaseModel):
+    status: str
+    file_id: str
+    original_filename: str
+    url: str
+    content_type: str
+    size_bytes: int
+    width: int
+    height: int
