@@ -13,31 +13,211 @@
                 <span class="status-dot" aria-hidden="true"></span>
                 <h1>ORACLE CHAT</h1>
             </div>
-            <span class="header-badge">UI Preview</span>
+
+            <div class="header-actions">
+                <span id="provider-badge" class="header-badge" title="Active provider and model">
+                    UI Preview
+                </span>
+
+                <button
+                    id="logs-toggle-btn"
+                    class="icon-button"
+                    type="button"
+                    aria-label="Toggle event and error logs"
+                    title="Event & Error Logs"
+                >
+                    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                        <polyline points="14 2 14 8 20 8"></polyline>
+                        <line x1="8" y1="13" x2="16" y2="13"></line>
+                        <line x1="8" y1="17" x2="13" y2="17"></line>
+                    </svg>
+                    <span class="btn-label">Logs</span>
+                    <span id="log-error-badge" class="error-count hidden">0</span>
+                </button>
+
+                <button
+                    id="settings-btn"
+                    class="icon-button"
+                    type="button"
+                    aria-label="Open settings"
+                    title="Settings"
+                >
+                    <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <circle cx="12" cy="12" r="3"></circle>
+                        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+                    </svg>
+                </button>
+            </div>
         </header>
 
-        <main id="chat-history" class="chat-history" aria-live="polite">
-            <div id="empty-state" class="empty-state">
-                <h2>How can I help you today?</h2>
-                <p>Type a message below to test the chat interface.</p>
-            </div>
-        </main>
+        <!-- Chat View -->
+        <section id="chat-view" class="view-container">
+            <main id="chat-history" class="chat-history" aria-live="polite">
+                <div id="empty-state" class="empty-state">
+                    <h2>How can I help you today?</h2>
+                    <p>Configure your provider via the gear icon or type a message below to test the chat interface.</p>
+                </div>
+            </main>
 
-        <footer class="chat-input-area">
-            <form id="chat-form" class="chat-form">
-                <textarea
-                    id="message-input"
-                    class="message-input"
-                    rows="1"
-                    placeholder="Message ORACLE CHAT..."
-                    aria-label="Message input"
-                ></textarea>
-                <button id="send-button" class="send-button" type="submit" disabled aria-label="Send message">
-                    Send
-                </button>
-            </form>
-            <p class="input-hint">Press Enter to send, Shift + Enter for a new line.</p>
-        </footer>
+            <footer class="chat-input-area">
+                <form id="chat-form" class="chat-form">
+                    <textarea
+                        id="message-input"
+                        class="message-input"
+                        rows="1"
+                        placeholder="Message ORACLE CHAT..."
+                        aria-label="Message input"
+                    ></textarea>
+                    <button id="send-button" class="send-button" type="submit" disabled aria-label="Send message">
+                        Send
+                    </button>
+                </form>
+                <p class="input-hint">Press Enter to send, Shift + Enter for a new line.</p>
+            </footer>
+        </section>
+
+        <!-- Settings View -->
+        <section id="settings-view" class="settings-view hidden" aria-label="Settings page">
+            <div class="settings-container">
+                <div class="settings-top">
+                    <div>
+                        <h2>Settings</h2>
+                        <p class="settings-subtitle">Configure LLM provider credentials, local Ollama discovery, and troubleshooting.</p>
+                    </div>
+                    <button id="back-to-chat-btn" class="secondary-btn" type="button">
+                        &larr; Back to Chat
+                    </button>
+                </div>
+
+                <form id="settings-form" class="settings-form">
+                    <div class="settings-card">
+                        <h3>LLM Provider</h3>
+                        <p class="field-help">Select whether requests should target OpenRouter or a local Ollama instance.</p>
+                        <div class="provider-options">
+                            <label class="provider-option">
+                                <input type="radio" name="provider" value="openrouter" checked>
+                                <span class="provider-card-body">
+                                    <strong>OpenRouter</strong>
+                                    <small>Cloud API with multiple models</small>
+                                </span>
+                            </label>
+                            <label class="provider-option">
+                                <input type="radio" name="provider" value="ollama">
+                                <span class="provider-card-body">
+                                    <strong>Ollama</strong>
+                                    <small>Local models with dynamic discovery</small>
+                                </span>
+                            </label>
+                        </div>
+                    </div>
+
+                    <!-- OpenRouter Settings -->
+                    <div id="openrouter-section" class="settings-card">
+                        <h3>OpenRouter Configuration</h3>
+
+                        <div class="form-group">
+                            <label for="openrouter-api-key">OpenRouter API Key</label>
+                            <div class="input-with-action">
+                                <input
+                                    id="openrouter-api-key"
+                                    type="password"
+                                    placeholder="sk-or-v1-..."
+                                    autocomplete="off"
+                                >
+                                <button id="toggle-key-btn" class="secondary-btn" type="button">Show</button>
+                            </div>
+                            <p class="field-help">Stored locally in your browser (localStorage) until backend routing is connected in later milestones.</p>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="openrouter-model">OpenRouter Model</label>
+                            <input
+                                id="openrouter-model"
+                                type="text"
+                                list="openrouter-model-presets"
+                                placeholder="google/gemma-4-31b-it:free"
+                            >
+                            <datalist id="openrouter-model-presets">
+                                <option value="google/gemma-4-31b-it:free"></option>
+                                <option value="meta-llama/llama-3.3-70b-instruct:free"></option>
+                                <option value="openai/gpt-4o-mini"></option>
+                                <option value="anthropic/claude-3.5-sonnet"></option>
+                            </datalist>
+                            <p class="field-help">Pick a preset or enter any OpenRouter model ID.</p>
+                        </div>
+                    </div>
+
+                    <!-- Ollama Settings -->
+                    <div id="ollama-section" class="settings-card hidden">
+                        <h3>Ollama Local Model Discovery</h3>
+
+                        <div class="form-group">
+                            <label for="ollama-base-url">Ollama Base URL</label>
+                            <div class="input-with-action">
+                                <input
+                                    id="ollama-base-url"
+                                    type="url"
+                                    placeholder="http://localhost:11434"
+                                >
+                                <button id="discover-ollama-btn" class="primary-btn" type="button">
+                                    Discover Models
+                                </button>
+                            </div>
+                            <p class="field-help">Queries <code>/api/tags</code> via the backend server to discover installed Ollama models.</p>
+                        </div>
+
+                        <div id="ollama-discovery-status" class="status-banner hidden" role="status"></div>
+
+                        <div class="form-group">
+                            <label for="ollama-model-select">Discovered Local Models</label>
+                            <select id="ollama-model-select">
+                                <option value="">-- Click "Discover Models" to scan Ollama --</option>
+                            </select>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="ollama-custom-model">Or Enter Ollama Model Name Manually</label>
+                            <input
+                                id="ollama-custom-model"
+                                type="text"
+                                placeholder="e.g. gemma3:4b or qwen2.5-vl"
+                            >
+                        </div>
+                    </div>
+
+                    <div class="settings-actions">
+                        <div class="settings-actions-left">
+                            <button id="save-settings-btn" class="primary-btn" type="submit">Save Settings</button>
+                            <button id="reset-settings-btn" class="secondary-btn" type="button">Reset Defaults</button>
+                        </div>
+                        <button id="open-logs-from-settings-btn" class="secondary-btn" type="button">Open Log Window</button>
+                    </div>
+
+                    <div id="settings-save-feedback" class="status-banner hidden" role="status"></div>
+                </form>
+            </div>
+        </section>
+
+        <!-- Troubleshooting Log Window -->
+        <aside id="log-drawer" class="log-drawer hidden" aria-label="Event and Error Log Window">
+            <div class="log-header">
+                <div class="log-title-group">
+                    <strong>Event &amp; Error Log</strong>
+                    <div class="log-filters" role="group" aria-label="Filter logs">
+                        <button type="button" class="filter-btn active" data-filter="all">All</button>
+                        <button type="button" class="filter-btn" data-filter="event">Events</button>
+                        <button type="button" class="filter-btn" data-filter="error">Errors</button>
+                    </div>
+                </div>
+                <div class="log-actions">
+                    <button id="copy-logs-btn" class="secondary-btn small-btn" type="button">Copy Logs</button>
+                    <button id="clear-logs-btn" class="secondary-btn small-btn" type="button">Clear</button>
+                    <button id="close-logs-btn" class="secondary-btn small-btn" type="button">Close</button>
+                </div>
+            </div>
+            <div id="log-output" class="log-output" aria-live="polite"></div>
+        </aside>
     </div>
 
     <script src="/static/js/app.js"></script>
