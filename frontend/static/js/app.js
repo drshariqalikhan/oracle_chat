@@ -50,6 +50,7 @@ const logFilterButtons = document.querySelectorAll(".filter-btn");
 let currentSettings = loadSettings();
 const logEntries = [];
 let activeLogFilter = "all";
+let isSending = false;
 
 // ---------------------------
 // Event & Error Logging
@@ -61,7 +62,7 @@ function formatTimestamp(date = new Date()) {
 function addLog(level, source, message, details = null) {
     const entry = {
         timestamp: formatTimestamp(),
-        level, // "INFO" | "WARN" | "ERROR"
+        level,
         source,
         message,
         details: details ? (typeof details === "string" ? details : JSON.stringify(details)) : "",
@@ -323,10 +324,10 @@ async function discoverOllamaModels() {
 }
 
 // ---------------------------
-// Chat UI
+// Chat UI & Backend Integration
 // ---------------------------
 function updateSendButtonState() {
-    sendButton.disabled = messageInput.value.trim().length === 0;
+    sendButton.disabled = isSending || messageInput.value.trim().length === 0;
 }
 
 function autoResizeInput() {
@@ -338,7 +339,7 @@ function scrollToBottom() {
     chatHistory.scrollTop = chatHistory.scrollHeight;
 }
 
-function appendMessage(role, text) {
+function appendMessage(role, text, extraClass = "") {
     if (emptyState && emptyState.parentNode) {
         emptyState.remove();
     }
@@ -351,37 +352,82 @@ function appendMessage(role, text) {
     roleLabel.textContent = role === "user" ? "You" : "Assistant";
 
     const bubble = document.createElement("div");
-    bubble.className = "message-bubble";
+    bubble.className = extraClass ? `message-bubble ${extraClass}` : "message-bubble";
     bubble.textContent = text;
 
     row.appendChild(roleLabel);
     row.appendChild(bubble);
     chatHistory.appendChild(row);
     scrollToBottom();
+
+    return bubble;
 }
 
-function handleSend(event) {
+function extractApiErrorMessage(data, statusCode) {
+    if (!data) {
+        return `HTTP ${statusCode}`;
+    }
+    if (typeof data.detail === "string") {
+        return data.detail;
+    }
+    if (Array.isArray(data.detail) && data.detail.length > 0) {
+        return data.detail.map((item) => item.msg || JSON.stringify(item)).join("; ");
+    }
+    return `HTTP ${statusCode}`;
+}
+
+async function handleSend(event) {
     event.preventDefault();
 
     const text = messageInput.value.trim();
-    if (!text) {
+    if (!text || isSending) {
         return;
     }
 
     appendMessage("user", text);
-    addLog("INFO", "CHAT", "User submitted message in UI preview.", `length=${text.length}`);
-
     messageInput.value = "";
     autoResizeInput();
-    updateSendButtonState();
-    messageInput.focus();
 
-    const activeProvider = currentSettings.provider;
-    const activeModel = getActiveModelName(currentSettings);
-    appendMessage(
-        "assistant",
-        `UI Preview (${activeProvider} · ${activeModel}) received: "${text}"`
-    );
+    isSending = true;
+    updateSendButtonState();
+
+    const pendingBubble = appendMessage("assistant", "Sending to backend...", "pending");
+    addLog("INFO", "CHAT", "POST /chat request sent.", `length=${text.length}`);
+
+    try {
+        const response = await fetch("/chat", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ message: text }),
+        });
+
+        let data = null;
+        try {
+            data = await response.json();
+        } catch (parseErr) {
+            throw new Error(`Invalid JSON response (HTTP ${response.status})`);
+        }
+
+        if (!response.ok) {
+            throw new Error(extractApiErrorMessage(data, response.status));
+        }
+
+        pendingBubble.classList.remove("pending");
+        pendingBubble.textContent = data.reply ?? "";
+        addLog("INFO", "CHAT", "Received reply from POST /chat.", `replyLength=${(data.reply || "").length}`);
+    } catch (err) {
+        pendingBubble.classList.remove("pending");
+        pendingBubble.classList.add("error");
+        pendingBubble.textContent = `Error: ${err.message}`;
+        addLog("ERROR", "CHAT", "POST /chat failed.", err.message);
+    } finally {
+        isSending = false;
+        updateSendButtonState();
+        messageInput.focus();
+        scrollToBottom();
+    }
 }
 
 // ---------------------------
