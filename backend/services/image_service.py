@@ -1,3 +1,4 @@
+import base64
 import io
 from dataclasses import dataclass
 from pathlib import Path
@@ -8,6 +9,12 @@ from PIL import Image, UnidentifiedImageError
 
 ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
 ALLOWED_PIL_FORMATS = {"JPEG", "PNG", "WEBP"}
+EXTENSION_TO_MIME = {
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".png": "image/png",
+    ".webp": "image/webp",
+}
 MAX_IMAGE_BYTES = 10 * 1024 * 1024  # 10 MB
 
 
@@ -78,7 +85,7 @@ class ImageService:
         destination = self.uploads_dir / saved_filename
         destination.write_bytes(content)
 
-        content_type = file.content_type or f"image/{pil_format.lower()}"
+        content_type = file.content_type or EXTENSION_TO_MIME[normalized_ext]
         return SavedImageInfo(
             file_id=saved_filename,
             original_filename=original_name,
@@ -88,3 +95,26 @@ class ImageService:
             width=width,
             height=height,
         )
+
+    def load_image_as_data_url(self, file_id: str) -> str:
+        cleaned_id = file_id.strip()
+        if not cleaned_id or Path(cleaned_id).name != cleaned_id:
+            raise ImageValidationError("Invalid image file_id.", status_code=400)
+
+        image_path = self.uploads_dir / cleaned_id
+        if not image_path.is_file():
+            raise ImageValidationError(
+                f"Uploaded image '{cleaned_id}' was not found.",
+                status_code=404,
+            )
+
+        suffix = image_path.suffix.lower()
+        mime_type = EXTENSION_TO_MIME.get(suffix)
+        if not mime_type:
+            raise ImageValidationError(
+                f"Unsupported image extension '{suffix}'.",
+                status_code=400,
+            )
+
+        encoded = base64.b64encode(image_path.read_bytes()).decode("ascii")
+        return f"data:{mime_type};base64,{encoded}"

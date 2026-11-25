@@ -26,3 +26,15 @@ class LLMProvider(ABC):
     ) -> LLMResponse:
         """Send chat messages and return an LLMResponse containing text and resolved model."""
         raise NotImplementedError
+
+    @abstractmethod
+    async def analyze_image(
+        self,
+        prompt: str,
+        image_data_url: str,
+        history: list[dict[str, Any]] | None = None,
+        model: str | None = None,
+        **kwargs: Any,
+    ) -> LLMResponse:
+        """Analyze an image using a multimodal model and return an LLMResponse."""
+        raise NotImplementedError

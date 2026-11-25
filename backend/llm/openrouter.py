@@ -11,7 +11,7 @@ class OpenRouterProvider(LLMProvider):
         api_key: str,
         default_model: str = "openrouter/free",
         base_url: str = "https://openrouter.ai/api/v1",
-        timeout: float = 60.0,
+        timeout: float = 90.0,
     ) -> None:
         self.api_key = api_key.strip()
         self.default_model = default_model.strip()
@@ -97,6 +97,24 @@ class OpenRouterProvider(LLMProvider):
 
         assigned_model = str(data.get("model") or selected_model).strip()
         return LLMResponse(content=content.strip(), model=assigned_model)
+
+    async def analyze_image(
+        self,
+        prompt: str,
+        image_data_url: str,
+        history: list[dict[str, Any]] | None = None,
+        model: str | None = None,
+        **kwargs: Any,
+    ) -> LLMResponse:
+        multimodal_message = {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": prompt},
+                {"type": "image_url", "image_url": {"url": image_data_url}},
+            ],
+        }
+        messages = [*(history or []), multimodal_message]
+        return await self.chat(messages=messages, model=model, **kwargs)
 
     @staticmethod
     def _extract_error_detail(response: httpx.Response) -> str:

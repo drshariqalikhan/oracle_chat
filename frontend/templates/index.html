@@ -70,7 +70,7 @@
             <main id="chat-history" class="chat-history" aria-live="polite">
                 <div id="empty-state" class="empty-state">
                     <h2>How can I help you today?</h2>
-                    <p>Configure your OpenRouter key via the gear icon (or <code>.env</code>), upload an image, or send a message below.</p>
+                    <p>Configure your OpenRouter key via the gear icon (or <code>.env</code>), upload an image for vision analysis, or send a message below.</p>
                 </div>
             </main>
 
@@ -181,21 +181,31 @@
                                 type="text"
                                 placeholder="openrouter/free"
                             >
-                            <p class="field-help">Keep <code>openrouter/free</code> to let OpenRouter assign a free model automatically, then stick to it.</p>
+                            <p class="field-help">Keep <code>openrouter/free</code> to let OpenRouter assign free text &amp; vision models automatically, then stick to them.</p>
                         </div>
 
                         <div class="form-group">
-                            <label for="pinned-free-model">Assigned Sticky Free Model</label>
+                            <label for="pinned-free-model">Assigned Sticky Free Text Model</label>
+                            <input
+                                id="pinned-free-model"
+                                type="text"
+                                readonly
+                                placeholder="Not assigned yet (will auto-pin on first text reply)"
+                            >
+                        </div>
+
+                        <div class="form-group">
+                            <label for="pinned-vision-model">Assigned Sticky Free Vision Model</label>
                             <div class="input-with-action">
                                 <input
-                                    id="pinned-free-model"
+                                    id="pinned-vision-model"
                                     type="text"
                                     readonly
-                                    placeholder="Not assigned yet (will auto-pin on first reply)"
+                                    placeholder="Not assigned yet (will auto-pin on first image analysis)"
                                 >
-                                <button id="clear-pinned-btn" class="secondary-btn" type="button">Clear Pin</button>
+                                <button id="clear-pinned-btn" class="secondary-btn" type="button">Clear Pins</button>
                             </div>
-                            <p class="field-help">Once OpenRouter assigns a free model, subsequent messages stick to this model until cleared or unavailable.</p>
+                            <p class="field-help">Once OpenRouter assigns free models, subsequent requests stick to them until cleared or unavailable.</p>
                         </div>
                     </div>
 

@@ -6,6 +6,7 @@ const DEFAULT_SETTINGS = {
     openrouterApiKey: "",
     openrouterModel: "openrouter/free",
     pinnedOpenRouterModel: "",
+    pinnedVisionModel: "",
     ollamaBaseUrl: "http://localhost:11434",
     ollamaModel: "",
 };
@@ -41,6 +42,7 @@ const openrouterApiKeyInput = document.getElementById("openrouter-api-key");
 const toggleKeyBtn = document.getElementById("toggle-key-btn");
 const openrouterModelInput = document.getElementById("openrouter-model");
 const pinnedFreeModelInput = document.getElementById("pinned-free-model");
+const pinnedVisionModelInput = document.getElementById("pinned-vision-model");
 const clearPinnedBtn = document.getElementById("clear-pinned-btn");
 const ollamaBaseUrlInput = document.getElementById("ollama-base-url");
 const discoverOllamaBtn = document.getElementById("discover-ollama-btn");
@@ -320,6 +322,7 @@ function populateSettingsForm(settings) {
     openrouterApiKeyInput.value = settings.openrouterApiKey;
     openrouterModelInput.value = settings.openrouterModel;
     pinnedFreeModelInput.value = settings.pinnedOpenRouterModel || "";
+    pinnedVisionModelInput.value = settings.pinnedVisionModel || "";
     ollamaBaseUrlInput.value = settings.ollamaBaseUrl;
     ollamaCustomModelInput.value = settings.ollamaModel;
 
@@ -438,20 +441,22 @@ async function discoverOllamaModels() {
 
 async function clearPinnedModel() {
     currentSettings.pinnedOpenRouterModel = "";
+    currentSettings.pinnedVisionModel = "";
     saveSettingsToStorage(currentSettings);
     pinnedFreeModelInput.value = "";
+    pinnedVisionModelInput.value = "";
     updateHeaderBadge();
 
     try {
         await fetch("/chat/reset-model", { method: "POST" });
         showStatusBanner(
             settingsSaveFeedback,
-            "Pinned free model cleared. Next message will ask openrouter/free to assign a new model.",
+            "Pinned free text & vision models cleared. Next requests will ask openrouter/free to assign new models.",
             "info"
         );
-        addLog("INFO", "SETTINGS", "Cleared pinned OpenRouter free model.");
+        addLog("INFO", "SETTINGS", "Cleared pinned OpenRouter text & vision models.");
     } catch (err) {
-        addLog("WARN", "SETTINGS", "Cleared browser pin; backend reset failed.", err.message);
+        addLog("WARN", "SETTINGS", "Cleared browser pins; backend reset failed.", err.message);
     }
 }
 
@@ -606,77 +611,80 @@ function extractApiErrorMessage(data, statusCode) {
 async function handleSend(event) {
     event.preventDefault();
 
-    const text = messageInput.value.trim();
+    const rawText = messageInput.value.trim();
     const attachedImage = pendingImage;
 
-    if ((!text && !attachedImage) || isSending || isUploading) {
+    if ((!rawText && !attachedImage) || isSending || isUploading) {
         return;
     }
 
-    if (attachedImage) {
-        appendMessage("user", text, "", attachedImage);
+    const promptText = rawText || "Describe this image in detail.";
+
+    if (currentSettings.provider === "ollama") {
+        appendMessage("user", rawText || promptText, "", attachedImage);
         messageInput.value = "";
         autoResizeInput();
         clearPendingImage();
-
-        appendMessage(
-            "assistant",
-            `Image "${attachedImage.original_filename}" (${attachedImage.width}x${attachedImage.height}) uploaded and displayed in chat. Vision analysis will be connected in Milestone 6.`
-        );
-        addLog("INFO", "CHAT", "Displayed uploaded image inside chat flow.", {
-            fileId: attachedImage.file_id,
-            url: attachedImage.url,
-        });
-        messageInput.focus();
-        return;
-    }
-
-    if (currentSettings.provider === "ollama") {
-        appendMessage("user", text);
-        messageInput.value = "";
-        autoResizeInput();
         updateSendButtonState();
         appendMessage(
             "assistant",
-            "Ollama chat inference is scheduled for Milestone 9. Please switch provider to OpenRouter in Settings to chat now.",
+            "Ollama chat & vision inference is scheduled for Milestone 9. Please switch provider to OpenRouter in Settings to analyze images now.",
             "error"
         );
         addLog("WARN", "CHAT", "Blocked send while Ollama selected (Ollama chat lands in Milestone 9).");
         return;
     }
 
-    appendMessage("user", text);
+    appendMessage("user", rawText || (attachedImage ? "Describe this image in detail." : ""), "", attachedImage);
     messageInput.value = "";
     autoResizeInput();
+    if (attachedImage) {
+        clearPendingImage();
+    }
 
     isSending = true;
     updateSendButtonState();
 
     const routerModel = currentSettings.openrouterModel || DEFAULT_SETTINGS.openrouterModel;
+    const isVision = Boolean(attachedImage);
+    const activePin = isVision
+        ? currentSettings.pinnedVisionModel
+        : currentSettings.pinnedOpenRouterModel;
     const effectiveDisplay =
-        routerModel === "openrouter/free" && currentSettings.pinnedOpenRouterModel
-            ? currentSettings.pinnedOpenRouterModel
-            : routerModel;
+        routerModel === "openrouter/free" && activePin ? activePin : routerModel;
 
-    const pendingBubble = appendMessage("assistant", `Thinking (${effectiveDisplay})...`, "pending");
+    const pendingBubble = appendMessage(
+        "assistant",
+        isVision ? `Analyzing image (${effectiveDisplay})...` : `Thinking (${effectiveDisplay})...`,
+        "pending"
+    );
 
     const requestBody = {
-        message: text,
+        message: promptText,
         session_id: currentSessionId,
         model: routerModel,
     };
-    if (routerModel === "openrouter/free" && currentSettings.pinnedOpenRouterModel) {
-        requestBody.pinned_model = currentSettings.pinnedOpenRouterModel;
+    if (attachedImage) {
+        requestBody.image_id = attachedImage.file_id;
+    }
+    if (routerModel === "openrouter/free") {
+        if (isVision && currentSettings.pinnedVisionModel) {
+            requestBody.pinned_vision_model = currentSettings.pinnedVisionModel;
+        } else if (!isVision && currentSettings.pinnedOpenRouterModel) {
+            requestBody.pinned_model = currentSettings.pinnedOpenRouterModel;
+        }
     }
     if (currentSettings.openrouterApiKey) {
         requestBody.api_key = currentSettings.openrouterApiKey;
     }
 
-    addLog("INFO", "CHAT", "POST /chat request sent.", {
+    addLog("INFO", isVision ? "VISION" : "CHAT", "POST /chat request sent.", {
         sessionId: currentSessionId,
         provider: "openrouter",
         model: routerModel,
-        pinnedModel: requestBody.pinned_model || null,
+        vision: isVision,
+        imageId: attachedImage ? attachedImage.file_id : null,
+        pinnedModel: activePin || null,
         usingUiApiKey: Boolean(currentSettings.openrouterApiKey),
     });
 
@@ -706,8 +714,14 @@ async function handleSend(event) {
         }
 
         if (routerModel === "openrouter/free" && data.model && data.model !== "openrouter/free") {
-            const previouslyPinned = currentSettings.pinnedOpenRouterModel;
-            if (previouslyPinned !== data.model) {
+            if (data.vision_used) {
+                if (currentSettings.pinnedVisionModel !== data.model) {
+                    currentSettings.pinnedVisionModel = data.model;
+                    saveSettingsToStorage(currentSettings);
+                    pinnedVisionModelInput.value = data.model;
+                    addLog("INFO", "OPENROUTER", `Assigned & pinned free vision model: ${data.model}`);
+                }
+            } else if (currentSettings.pinnedOpenRouterModel !== data.model) {
                 currentSettings.pinnedOpenRouterModel = data.model;
                 saveSettingsToStorage(currentSettings);
                 pinnedFreeModelInput.value = data.model;
@@ -718,17 +732,18 @@ async function handleSend(event) {
 
         pendingBubble.classList.remove("pending");
         pendingBubble.textContent = data.reply ?? "";
-        addLog("INFO", "CHAT", "Received OpenRouter reply.", {
+        addLog("INFO", data.vision_used ? "VISION" : "CHAT", "Received OpenRouter reply.", {
             sessionId: data.session_id,
             historyLength: data.history_length,
             model: data.model || effectiveDisplay,
             pinned: Boolean(data.pinned),
+            visionUsed: Boolean(data.vision_used),
         });
     } catch (err) {
         pendingBubble.classList.remove("pending");
         pendingBubble.classList.add("error");
         pendingBubble.textContent = `Error: ${err.message}`;
-        addLog("ERROR", "CHAT", "OpenRouter chat request failed.", err.message);
+        addLog("ERROR", isVision ? "VISION" : "CHAT", "OpenRouter request failed.", err.message);
     } finally {
         isSending = false;
         updateSendButtonState();
@@ -818,6 +833,10 @@ settingsForm.addEventListener("submit", (event) => {
         pinnedOpenRouterModel:
             enteredOpenRouterModel === "openrouter/free"
                 ? currentSettings.pinnedOpenRouterModel
+                : "",
+        pinnedVisionModel:
+            enteredOpenRouterModel === "openrouter/free"
+                ? currentSettings.pinnedVisionModel
                 : "",
         ollamaBaseUrl: ollamaBaseUrlInput.value.trim() || DEFAULT_SETTINGS.ollamaBaseUrl,
         ollamaModel: ollamaCustomModelInput.value.trim() || ollamaModelSelect.value,

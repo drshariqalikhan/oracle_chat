@@ -24,7 +24,7 @@ UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
 
 get_settings()
 
-app = FastAPI(title="ORACLE CHAT", version="0.5.0")
+app = FastAPI(title="ORACLE CHAT", version="0.6.0")
 
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 app.mount("/uploads", StaticFiles(directory=str(UPLOADS_DIR)), name="uploads")

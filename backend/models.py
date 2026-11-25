@@ -1,20 +1,26 @@
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, model_validator
 
 
 class ChatRequest(BaseModel):
-    message: str
+    message: str = ""
     session_id: str | None = None
+    image_id: str | None = None
     model: str | None = None
     pinned_model: str | None = None
+    pinned_vision_model: str | None = None
     api_key: str | None = None
 
-    @field_validator("message")
-    @classmethod
-    def message_must_not_be_empty(cls, value: str) -> str:
-        cleaned = value.strip()
-        if not cleaned:
-            raise ValueError("Message cannot be empty.")
-        return cleaned
+    @model_validator(mode="after")
+    def validate_message_or_image(self) -> "ChatRequest":
+        cleaned_msg = self.message.strip()
+        cleaned_img = (self.image_id or "").strip() or None
+
+        if not cleaned_msg and not cleaned_img:
+            raise ValueError("Either a message or an uploaded image_id is required.")
+
+        self.message = cleaned_msg or "Describe this image in detail."
+        self.image_id = cleaned_img
+        return self
 
 
 class ChatResponse(BaseModel):
@@ -23,6 +29,7 @@ class ChatResponse(BaseModel):
     history_length: int
     model: str | None = None
     pinned: bool = False
+    vision_used: bool = False
 
 
 class ChatHistoryResponse(BaseModel):
