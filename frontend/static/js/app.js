@@ -3,7 +3,8 @@ const STORAGE_KEY = "oracle_chat_settings";
 const DEFAULT_SETTINGS = {
     provider: "openrouter",
     openrouterApiKey: "",
-    openrouterModel: "google/gemma-4-31b-it:free",
+    openrouterModel: "openrouter/free",
+    pinnedOpenRouterModel: "",
     ollamaBaseUrl: "http://localhost:11434",
     ollamaModel: "",
 };
@@ -28,6 +29,8 @@ const ollamaSection = document.getElementById("ollama-section");
 const openrouterApiKeyInput = document.getElementById("openrouter-api-key");
 const toggleKeyBtn = document.getElementById("toggle-key-btn");
 const openrouterModelInput = document.getElementById("openrouter-model");
+const pinnedFreeModelInput = document.getElementById("pinned-free-model");
+const clearPinnedBtn = document.getElementById("clear-pinned-btn");
 const ollamaBaseUrlInput = document.getElementById("ollama-base-url");
 const discoverOllamaBtn = document.getElementById("discover-ollama-btn");
 const ollamaDiscoveryStatus = document.getElementById("ollama-discovery-status");
@@ -170,7 +173,11 @@ function loadSettings() {
         if (!raw) {
             return { ...DEFAULT_SETTINGS };
         }
-        return { ...DEFAULT_SETTINGS, ...JSON.parse(raw) };
+        const parsed = JSON.parse(raw);
+        if (parsed.openrouterModel === "google/gemma-4-31b-it:free") {
+            parsed.openrouterModel = DEFAULT_SETTINGS.openrouterModel;
+        }
+        return { ...DEFAULT_SETTINGS, ...parsed };
     } catch (err) {
         return { ...DEFAULT_SETTINGS };
     }
@@ -183,6 +190,9 @@ function saveSettingsToStorage(settings) {
 function getActiveModelName(settings) {
     if (settings.provider === "ollama") {
         return settings.ollamaModel || "not selected";
+    }
+    if (settings.openrouterModel === "openrouter/free" && settings.pinnedOpenRouterModel) {
+        return `${settings.pinnedOpenRouterModel} (pinned)`;
     }
     return settings.openrouterModel || DEFAULT_SETTINGS.openrouterModel;
 }
@@ -213,6 +223,7 @@ function populateSettingsForm(settings) {
 
     openrouterApiKeyInput.value = settings.openrouterApiKey;
     openrouterModelInput.value = settings.openrouterModel;
+    pinnedFreeModelInput.value = settings.pinnedOpenRouterModel || "";
     ollamaBaseUrlInput.value = settings.ollamaBaseUrl;
     ollamaCustomModelInput.value = settings.ollamaModel;
 
@@ -323,6 +334,25 @@ async function discoverOllamaModels() {
     }
 }
 
+async function clearPinnedModel() {
+    currentSettings.pinnedOpenRouterModel = "";
+    saveSettingsToStorage(currentSettings);
+    pinnedFreeModelInput.value = "";
+    updateHeaderBadge();
+
+    try {
+        await fetch("/chat/reset-model", { method: "POST" });
+        showStatusBanner(
+            settingsSaveFeedback,
+            "Pinned free model cleared. Next message will ask openrouter/free to assign a new model.",
+            "info"
+        );
+        addLog("INFO", "SETTINGS", "Cleared pinned OpenRouter free model.");
+    } catch (err) {
+        addLog("WARN", "SETTINGS", "Cleared browser pin; backend reset failed.", err.message);
+    }
+}
+
 // ---------------------------
 // Chat UI & Backend Integration
 // ---------------------------
@@ -384,6 +414,20 @@ async function handleSend(event) {
         return;
     }
 
+    if (currentSettings.provider === "ollama") {
+        appendMessage("user", text);
+        messageInput.value = "";
+        autoResizeInput();
+        updateSendButtonState();
+        appendMessage(
+            "assistant",
+            "Ollama chat inference is scheduled for Milestone 9. Please switch provider to OpenRouter in Settings to chat now.",
+            "error"
+        );
+        addLog("WARN", "CHAT", "Blocked send while Ollama selected (Ollama chat lands in Milestone 9).");
+        return;
+    }
+
     appendMessage("user", text);
     messageInput.value = "";
     autoResizeInput();
@@ -391,8 +435,31 @@ async function handleSend(event) {
     isSending = true;
     updateSendButtonState();
 
-    const pendingBubble = appendMessage("assistant", "Sending to backend...", "pending");
-    addLog("INFO", "CHAT", "POST /chat request sent.", `length=${text.length}`);
+    const routerModel = currentSettings.openrouterModel || DEFAULT_SETTINGS.openrouterModel;
+    const effectiveDisplay =
+        routerModel === "openrouter/free" && currentSettings.pinnedOpenRouterModel
+            ? currentSettings.pinnedOpenRouterModel
+            : routerModel;
+
+    const pendingBubble = appendMessage("assistant", `Thinking (${effectiveDisplay})...`, "pending");
+
+    const requestBody = {
+        message: text,
+        model: routerModel,
+    };
+    if (routerModel === "openrouter/free" && currentSettings.pinnedOpenRouterModel) {
+        requestBody.pinned_model = currentSettings.pinnedOpenRouterModel;
+    }
+    if (currentSettings.openrouterApiKey) {
+        requestBody.api_key = currentSettings.openrouterApiKey;
+    }
+
+    addLog("INFO", "CHAT", "POST /chat request sent.", {
+        provider: "openrouter",
+        model: routerModel,
+        pinnedModel: requestBody.pinned_model || null,
+        usingUiApiKey: Boolean(currentSettings.openrouterApiKey),
+    });
 
     try {
         const response = await fetch("/chat", {
@@ -400,7 +467,7 @@ async function handleSend(event) {
             headers: {
                 "Content-Type": "application/json",
             },
-            body: JSON.stringify({ message: text }),
+            body: JSON.stringify(requestBody),
         });
 
         let data = null;
@@ -414,14 +481,29 @@ async function handleSend(event) {
             throw new Error(extractApiErrorMessage(data, response.status));
         }
 
+        if (routerModel === "openrouter/free" && data.model && data.model !== "openrouter/free") {
+            const previouslyPinned = currentSettings.pinnedOpenRouterModel;
+            if (previouslyPinned !== data.model) {
+                currentSettings.pinnedOpenRouterModel = data.model;
+                saveSettingsToStorage(currentSettings);
+                pinnedFreeModelInput.value = data.model;
+                updateHeaderBadge();
+                addLog("INFO", "OPENROUTER", `Assigned & pinned free model: ${data.model}`);
+            }
+        }
+
         pendingBubble.classList.remove("pending");
         pendingBubble.textContent = data.reply ?? "";
-        addLog("INFO", "CHAT", "Received reply from POST /chat.", `replyLength=${(data.reply || "").length}`);
+        addLog("INFO", "CHAT", "Received OpenRouter reply.", {
+            model: data.model || effectiveDisplay,
+            pinned: Boolean(data.pinned),
+            replyLength: (data.reply || "").length,
+        });
     } catch (err) {
         pendingBubble.classList.remove("pending");
         pendingBubble.classList.add("error");
         pendingBubble.textContent = `Error: ${err.message}`;
-        addLog("ERROR", "CHAT", "POST /chat failed.", err.message);
+        addLog("ERROR", "CHAT", "OpenRouter chat request failed.", err.message);
     } finally {
         isSending = false;
         updateSendButtonState();
@@ -466,6 +548,7 @@ toggleKeyBtn.addEventListener("click", () => {
 });
 
 discoverOllamaBtn.addEventListener("click", discoverOllamaModels);
+clearPinnedBtn.addEventListener("click", clearPinnedModel);
 
 ollamaModelSelect.addEventListener("change", () => {
     if (ollamaModelSelect.value) {
@@ -477,16 +560,22 @@ settingsForm.addEventListener("submit", (event) => {
     event.preventDefault();
 
     const selectedProvider = document.querySelector('input[name="provider"]:checked').value;
+    const enteredOpenRouterModel = openrouterModelInput.value.trim() || DEFAULT_SETTINGS.openrouterModel;
+
     const updated = {
         provider: selectedProvider,
         openrouterApiKey: openrouterApiKeyInput.value.trim(),
-        openrouterModel: openrouterModelInput.value.trim() || DEFAULT_SETTINGS.openrouterModel,
+        openrouterModel: enteredOpenRouterModel,
+        pinnedOpenRouterModel:
+            enteredOpenRouterModel === "openrouter/free"
+                ? currentSettings.pinnedOpenRouterModel
+                : "",
         ollamaBaseUrl: ollamaBaseUrlInput.value.trim() || DEFAULT_SETTINGS.ollamaBaseUrl,
         ollamaModel: ollamaCustomModelInput.value.trim() || ollamaModelSelect.value,
     };
 
     if (selectedProvider === "openrouter" && !updated.openrouterApiKey) {
-        addLog("WARN", "SETTINGS", "Saved OpenRouter provider without an API key.");
+        addLog("WARN", "SETTINGS", "Saved OpenRouter provider without UI key (will use backend .env if set).");
     }
     if (selectedProvider === "ollama" && !updated.ollamaModel) {
         addLog("WARN", "SETTINGS", "Saved Ollama provider without a selected model.");
@@ -509,12 +598,17 @@ settingsForm.addEventListener("submit", (event) => {
     });
 });
 
-resetSettingsBtn.addEventListener("click", () => {
+resetSettingsBtn.addEventListener("click", async () => {
     currentSettings = { ...DEFAULT_SETTINGS };
     saveSettingsToStorage(currentSettings);
     populateSettingsForm(currentSettings);
     updateHeaderBadge();
-    showStatusBanner(settingsSaveFeedback, "Settings reset to defaults.", "info");
+    try {
+        await fetch("/chat/reset-model", { method: "POST" });
+    } catch (err) {
+        // Ignore network errors during reset
+    }
+    showStatusBanner(settingsSaveFeedback, "Settings reset to defaults (openrouter/free).", "info");
     addLog("INFO", "SETTINGS", "Settings reset to defaults.");
 });
 

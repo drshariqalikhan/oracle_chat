@@ -16,7 +16,7 @@
 
             <div class="header-actions">
                 <span id="provider-badge" class="header-badge" title="Active provider and model">
-                    UI Preview
+                    OpenRouter · openrouter/free
                 </span>
 
                 <button
@@ -56,7 +56,7 @@
             <main id="chat-history" class="chat-history" aria-live="polite">
                 <div id="empty-state" class="empty-state">
                     <h2>How can I help you today?</h2>
-                    <p>Configure your provider via the gear icon or type a message below to test the chat interface.</p>
+                    <p>Configure your OpenRouter key via the gear icon (or <code>.env</code>) and send a message below.</p>
                 </div>
             </main>
 
@@ -99,7 +99,7 @@
                                 <input type="radio" name="provider" value="openrouter" checked>
                                 <span class="provider-card-body">
                                     <strong>OpenRouter</strong>
-                                    <small>Cloud API with multiple models</small>
+                                    <small>Cloud API with auto free model pinning</small>
                                 </span>
                             </label>
                             <label class="provider-option">
@@ -127,24 +127,31 @@
                                 >
                                 <button id="toggle-key-btn" class="secondary-btn" type="button">Show</button>
                             </div>
-                            <p class="field-help">Stored locally in your browser (localStorage) until backend routing is connected in later milestones.</p>
+                            <p class="field-help">Optional if <code>OPENROUTER_API_KEY</code> is set in backend <code>.env</code>. Saved in browser localStorage.</p>
                         </div>
 
                         <div class="form-group">
-                            <label for="openrouter-model">OpenRouter Model</label>
+                            <label for="openrouter-model">OpenRouter Model / Router</label>
                             <input
                                 id="openrouter-model"
                                 type="text"
-                                list="openrouter-model-presets"
-                                placeholder="google/gemma-4-31b-it:free"
+                                placeholder="openrouter/free"
                             >
-                            <datalist id="openrouter-model-presets">
-                                <option value="google/gemma-4-31b-it:free"></option>
-                                <option value="meta-llama/llama-3.3-70b-instruct:free"></option>
-                                <option value="openai/gpt-4o-mini"></option>
-                                <option value="anthropic/claude-3.5-sonnet"></option>
-                            </datalist>
-                            <p class="field-help">Pick a preset or enter any OpenRouter model ID.</p>
+                            <p class="field-help">Keep <code>openrouter/free</code> to let OpenRouter assign a free model automatically, then stick to it.</p>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="pinned-free-model">Assigned Sticky Free Model</label>
+                            <div class="input-with-action">
+                                <input
+                                    id="pinned-free-model"
+                                    type="text"
+                                    readonly
+                                    placeholder="Not assigned yet (will auto-pin on first reply)"
+                                >
+                                <button id="clear-pinned-btn" class="secondary-btn" type="button">Clear Pin</button>
+                            </div>
+                            <p class="field-help">Once OpenRouter assigns a free model, subsequent messages stick to this model until cleared or unavailable.</p>
                         </div>
                     </div>
 

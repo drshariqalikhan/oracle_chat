@@ -3,6 +3,9 @@ from pydantic import BaseModel, field_validator
 
 class ChatRequest(BaseModel):
     message: str
+    model: str | None = None
+    pinned_model: str | None = None
+    api_key: str | None = None
 
     @field_validator("message")
     @classmethod
@@ -15,3 +18,5 @@ class ChatRequest(BaseModel):
 
 class ChatResponse(BaseModel):
     reply: str
+    model: str | None = None
+    pinned: bool = False
