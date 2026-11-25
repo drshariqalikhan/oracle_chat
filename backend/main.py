@@ -10,6 +10,7 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
+from backend.config import get_settings
 from backend.routes.chat import router as chat_router
 from backend.routes.health import router as health_router
 
@@ -18,7 +19,9 @@ FRONTEND_DIR = BASE_DIR / "frontend"
 TEMPLATES_DIR = FRONTEND_DIR / "templates"
 STATIC_DIR = FRONTEND_DIR / "static"
 
-app = FastAPI(title="ORACLE CHAT", version="0.2.0")
+get_settings()
+
+app = FastAPI(title="ORACLE CHAT", version="0.4.0")
 
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 app.include_router(health_router)

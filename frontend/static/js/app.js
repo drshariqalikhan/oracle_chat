@@ -1,4 +1,5 @@
 const STORAGE_KEY = "oracle_chat_settings";
+const SESSION_STORAGE_KEY = "oracle_chat_session_id";
 
 const DEFAULT_SETTINGS = {
     provider: "openrouter",
@@ -13,11 +14,12 @@ const DEFAULT_SETTINGS = {
 const chatView = document.getElementById("chat-view");
 const settingsView = document.getElementById("settings-view");
 const chatHistory = document.getElementById("chat-history");
-const emptyState = document.getElementById("empty-state");
+const emptyStateTemplate = document.getElementById("empty-state").cloneNode(true);
 const chatForm = document.getElementById("chat-form");
 const messageInput = document.getElementById("message-input");
 const sendButton = document.getElementById("send-button");
 const providerBadge = document.getElementById("provider-badge");
+const newChatBtn = document.getElementById("new-chat-btn");
 
 // DOM Elements - Settings
 const settingsBtn = document.getElementById("settings-btn");
@@ -51,6 +53,7 @@ const closeLogsBtn = document.getElementById("close-logs-btn");
 const logFilterButtons = document.querySelectorAll(".filter-btn");
 
 let currentSettings = loadSettings();
+let currentSessionId = loadOrCreateSessionId();
 const logEntries = [];
 let activeLogFilter = "all";
 let isSending = false;
@@ -165,6 +168,87 @@ window.addEventListener("unhandledrejection", (event) => {
 });
 
 // ---------------------------
+// Session Management
+// ---------------------------
+function generateClientSessionId() {
+    if (window.crypto && typeof window.crypto.randomUUID === "function") {
+        return window.crypto.randomUUID().replace(/-/g, "");
+    }
+    return `sess_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function loadOrCreateSessionId() {
+    try {
+        const existing = localStorage.getItem(SESSION_STORAGE_KEY);
+        if (existing && existing.trim()) {
+            return existing.trim();
+        }
+        const created = generateClientSessionId();
+        localStorage.setItem(SESSION_STORAGE_KEY, created);
+        return created;
+    } catch (err) {
+        return generateClientSessionId();
+    }
+}
+
+async function startNewChat() {
+    if (isSending) {
+        return;
+    }
+
+    const previousSessionId = currentSessionId;
+    currentSessionId = generateClientSessionId();
+    try {
+        localStorage.setItem(SESSION_STORAGE_KEY, currentSessionId);
+    } catch (err) {
+        // Ignore storage errors
+    }
+
+    chatHistory.innerHTML = "";
+    chatHistory.appendChild(emptyStateTemplate.cloneNode(true));
+    closeSettingsPage();
+    messageInput.focus();
+
+    try {
+        await fetch(`/chat/history/${encodeURIComponent(previousSessionId)}`, {
+            method: "DELETE",
+        });
+    } catch (err) {
+        // Ignore cleanup errors
+    }
+
+    addLog("INFO", "SESSION", "Started new chat session.", {
+        previousSessionId,
+        newSessionId: currentSessionId,
+    });
+}
+
+async function restoreSessionHistory() {
+    try {
+        const response = await fetch(`/chat/history/${encodeURIComponent(currentSessionId)}`);
+        if (!response.ok) {
+            return;
+        }
+        const data = await response.json();
+        const messages = data.messages || [];
+        if (messages.length > 0) {
+            chatHistory.innerHTML = "";
+            for (const msg of messages) {
+                if (msg.role === "user" || msg.role === "assistant") {
+                    appendMessage(msg.role, msg.content || "");
+                }
+            }
+            addLog("INFO", "SESSION", "Restored session conversation history.", {
+                sessionId: currentSessionId,
+                messagesCount: messages.length,
+            });
+        }
+    } catch (err) {
+        addLog("WARN", "SESSION", "Could not restore session history.", err.message);
+    }
+}
+
+// ---------------------------
 // Settings Management
 // ---------------------------
 function loadSettings() {
@@ -255,7 +339,6 @@ function closeSettingsPage() {
     settingsView.classList.add("hidden");
     chatView.classList.remove("hidden");
     messageInput.focus();
-    addLog("INFO", "UI", "Returned to Chat view.");
 }
 
 function formatBytes(bytes) {
@@ -370,8 +453,9 @@ function scrollToBottom() {
 }
 
 function appendMessage(role, text, extraClass = "") {
-    if (emptyState && emptyState.parentNode) {
-        emptyState.remove();
+    const emptyEl = document.getElementById("empty-state");
+    if (emptyEl && emptyEl.parentNode) {
+        emptyEl.remove();
     }
 
     const row = document.createElement("div");
@@ -445,6 +529,7 @@ async function handleSend(event) {
 
     const requestBody = {
         message: text,
+        session_id: currentSessionId,
         model: routerModel,
     };
     if (routerModel === "openrouter/free" && currentSettings.pinnedOpenRouterModel) {
@@ -455,6 +540,7 @@ async function handleSend(event) {
     }
 
     addLog("INFO", "CHAT", "POST /chat request sent.", {
+        sessionId: currentSessionId,
         provider: "openrouter",
         model: routerModel,
         pinnedModel: requestBody.pinned_model || null,
@@ -481,6 +567,11 @@ async function handleSend(event) {
             throw new Error(extractApiErrorMessage(data, response.status));
         }
 
+        if (data.session_id) {
+            currentSessionId = data.session_id;
+            localStorage.setItem(SESSION_STORAGE_KEY, currentSessionId);
+        }
+
         if (routerModel === "openrouter/free" && data.model && data.model !== "openrouter/free") {
             const previouslyPinned = currentSettings.pinnedOpenRouterModel;
             if (previouslyPinned !== data.model) {
@@ -495,9 +586,10 @@ async function handleSend(event) {
         pendingBubble.classList.remove("pending");
         pendingBubble.textContent = data.reply ?? "";
         addLog("INFO", "CHAT", "Received OpenRouter reply.", {
+            sessionId: data.session_id,
+            historyLength: data.history_length,
             model: data.model || effectiveDisplay,
             pinned: Boolean(data.pinned),
-            replyLength: (data.reply || "").length,
         });
     } catch (err) {
         pendingBubble.classList.remove("pending");
@@ -531,8 +623,12 @@ messageInput.addEventListener("keydown", (event) => {
 
 chatForm.addEventListener("submit", handleSend);
 
+newChatBtn.addEventListener("click", startNewChat);
 settingsBtn.addEventListener("click", openSettingsPage);
-backToChatBtn.addEventListener("click", closeSettingsPage);
+backToChatBtn.addEventListener("click", () => {
+    closeSettingsPage();
+    addLog("INFO", "UI", "Returned to Chat view.");
+});
 
 providerRadios.forEach((radio) => {
     radio.addEventListener("change", (event) => {
@@ -632,6 +728,8 @@ logFilterButtons.forEach((btn) => {
 // Initialize
 updateHeaderBadge();
 addLog("INFO", "APP", "ORACLE CHAT UI initialized.", {
+    sessionId: currentSessionId,
     provider: currentSettings.provider,
     model: getActiveModelName(currentSettings),
 });
+restoreSessionHistory();
