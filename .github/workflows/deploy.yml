@@ -1,0 +1,41 @@
+name: Auto Deploy to Oracle VM
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Deploy to Oracle VM over SSH
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.VM_HOST }}
+          username: ${{ secrets.VM_USER }}
+          key: ${{ secrets.VM_SSH_KEY }}
+          port: 22
+          script: |
+            set -e
+            echo "=== Pulling latest changes on Oracle VM ==="
+            cd /home/ubuntu/oracle_chat
+            git fetch origin main
+            git reset --hard origin/main
+
+            echo "=== Updating Python dependencies ==="
+            source venv/bin/activate
+            pip install --upgrade pip
+            pip install -r requirements.txt
+
+            echo "=== Restarting oracle-chat service ==="
+            sudo systemctl daemon-reload
+            sudo systemctl restart oracle-chat
+
+            echo "=== Checking health ==="
+            sleep 2
+            sudo systemctl is-active --quiet oracle-chat && echo "oracle-chat service is ACTIVE and RUNNING!"
+            curl -s http://localhost:8080/health || exit 1
