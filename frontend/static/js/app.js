@@ -21,8 +21,10 @@ const chatHistory = document.getElementById("chat-history");
 const emptyStateTemplate = document.getElementById("empty-state").cloneNode(true);
 const chatForm = document.getElementById("chat-form");
 const messageInput = document.getElementById("message-input");
+const uiModeSelect = document.getElementById("ui-mode-select");
 const sendButton = document.getElementById("send-button");
 const providerBadge = document.getElementById("provider-badge");
+const a2uiDemoBtn = document.getElementById("a2ui-demo-btn");
 const newChatBtn = document.getElementById("new-chat-btn");
 
 // DOM Elements - Attachment
@@ -73,7 +75,7 @@ const logEntries = [];
 let activeLogFilter = "all";
 let isSending = false;
 let isUploading = false;
-let pendingAttachment = null; // { kind: "image" | "document", data: ... }
+let pendingAttachment = null;
 
 // ---------------------------
 // Event & Error Logging
@@ -587,7 +589,7 @@ async function handleAttachmentSelected(file) {
 }
 
 // ---------------------------
-// Chat UI & Backend Integration
+// Chat UI & Standardized Pydantic + A2UI Rendering
 // ---------------------------
 function updateSendButtonState() {
     const hasText = messageInput.value.trim().length > 0;
@@ -604,7 +606,31 @@ function scrollToBottom() {
     chatHistory.scrollTop = chatHistory.scrollHeight;
 }
 
-function appendMessage(role, text, extraClass = "", attachment = null) {
+function renderOutputIntoBubble(bubble, output) {
+    bubble.innerHTML = "";
+    const text = output && output.text ? output.text : "";
+    if (text) {
+        const textNode = document.createElement("div");
+        textNode.textContent = text;
+        bubble.appendChild(textNode);
+    }
+
+    if (
+        output &&
+        output.used_a2ui &&
+        Array.isArray(output.a2ui_messages) &&
+        output.a2ui_messages.length > 0 &&
+        window.OracleA2uiRenderer
+    ) {
+        const surfaceRoot = window.OracleA2uiRenderer.renderA2uiMessages(
+            output.a2ui_messages,
+            handleA2uiAction
+        );
+        bubble.appendChild(surfaceRoot);
+    }
+}
+
+function appendMessage(role, text, extraClass = "", attachment = null, output = null) {
     const emptyEl = document.getElementById("empty-state");
     if (emptyEl && emptyEl.parentNode) {
         emptyEl.remove();
@@ -647,7 +673,9 @@ function appendMessage(role, text, extraClass = "", attachment = null) {
         bubble.appendChild(pill);
     }
 
-    if (text) {
+    if (output) {
+        renderOutputIntoBubble(bubble, output);
+    } else if (text) {
         const textNode = document.createElement("div");
         textNode.textContent = text;
         bubble.appendChild(textNode);
@@ -674,47 +702,59 @@ function extractApiErrorMessage(data, statusCode) {
     return `HTTP ${statusCode}`;
 }
 
-async function handleSend(event) {
-    event.preventDefault();
-
-    const rawText = messageInput.value.trim();
-    const attached = pendingAttachment;
-
-    if ((!rawText && !attached) || isSending || isUploading) {
-        return;
+async function runA2uiShowcaseDemo() {
+    closeSettingsPage();
+    addLog("INFO", "A2UI", "Requesting 18-element A2UI showcase from /api/a2ui/showcase...");
+    try {
+        const response = await fetch("/api/a2ui/showcase");
+        const data = await response.json();
+        if (!response.ok) {
+            throw new Error(extractApiErrorMessage(data, response.status));
+        }
+        appendMessage("assistant", "", "", null, data.output);
+        addLog("INFO", "A2UI", "Rendered A2UI 18-element showcase.", {
+            componentCount: data.component_count,
+            components: data.components_supported,
+        });
+    } catch (err) {
+        appendMessage("assistant", `A2UI Demo error: ${err.message}`, "error");
+        addLog("ERROR", "A2UI", "Failed to load A2UI showcase.", err.message);
     }
+}
 
-    const isVision = Boolean(attached && attached.kind === "image");
-    const isDocument = Boolean(attached && attached.kind === "document");
-
-    let promptText = rawText;
-    if (!promptText) {
-        promptText = isVision
-            ? "Describe this image in detail."
-            : "Summarize this document and list its key points.";
+async function handleA2uiAction(actionPayload) {
+    addLog("INFO", "A2UI_ACTION", `Triggered action '${actionPayload.name}'`, actionPayload);
+    if (isSending || isUploading) {
+        return;
     }
 
     if (currentSettings.provider === "ollama") {
-        appendMessage("user", promptText, "", attached);
-        messageInput.value = "";
-        autoResizeInput();
-        clearPendingAttachment();
-        updateSendButtonState();
         appendMessage(
             "assistant",
-            "Ollama inference is scheduled for Milestone 9. Please switch provider to OpenRouter in Settings to chat or analyze files now.",
-            "error"
+            `Action captured locally: ${actionPayload.name} | Context: ${JSON.stringify(actionPayload.context)}. (Switch to OpenRouter in Settings to send actions to the LLM.)`
         );
-        addLog("WARN", "CHAT", "Blocked send while Ollama selected (Ollama chat lands in Milestone 9).");
         return;
     }
 
-    appendMessage("user", promptText, "", attached);
-    messageInput.value = "";
-    autoResizeInput();
-    if (attached) {
-        clearPendingAttachment();
-    }
+    const actionMessage = `UI Action "${actionPayload.name}" submitted with values: ${JSON.stringify(actionPayload.context)}`;
+    await sendChatRequest({
+        promptText: actionMessage,
+        a2uiAction: actionPayload,
+        userDisplayText: `[A2UI Action: ${actionPayload.name}] ${JSON.stringify(actionPayload.context)}`,
+    });
+}
+
+async function sendChatRequest({
+    promptText,
+    attached = null,
+    a2uiAction = null,
+    userDisplayText = null,
+}) {
+    const isVision = Boolean(attached && attached.kind === "image");
+    const isDocument = Boolean(attached && attached.kind === "document");
+    const uiMode = uiModeSelect.value || "auto";
+
+    appendMessage("user", userDisplayText || promptText, "", attached);
 
     isSending = true;
     updateSendButtonState();
@@ -737,6 +777,7 @@ async function handleSend(event) {
         message: promptText,
         session_id: currentSessionId,
         model: routerModel,
+        ui_mode: uiMode,
     };
     if (isVision) {
         requestBody.image_id = attached.data.file_id;
@@ -744,6 +785,9 @@ async function handleSend(event) {
     if (isDocument) {
         requestBody.document_id = attached.data.file_id;
         requestBody.document_name = attached.data.original_filename;
+    }
+    if (a2uiAction) {
+        requestBody.a2ui_action = a2uiAction;
     }
     if (routerModel === "openrouter/free") {
         if (isVision && currentSettings.pinnedVisionModel) {
@@ -761,12 +805,11 @@ async function handleSend(event) {
         sessionId: currentSessionId,
         provider: "openrouter",
         model: routerModel,
+        uiMode,
         vision: isVision,
         document: isDocument,
-        imageId: requestBody.image_id || null,
-        documentId: requestBody.document_id || null,
+        hasAction: Boolean(a2uiAction),
         pinnedModel: activePin || null,
-        usingUiApiKey: Boolean(currentSettings.openrouterApiKey),
     });
 
     try {
@@ -812,14 +855,20 @@ async function handleSend(event) {
         }
 
         pendingBubble.classList.remove("pending");
-        pendingBubble.textContent = data.reply ?? "";
-        addLog("INFO", logSource, "Received OpenRouter reply.", {
+        const standardized = data.output || { text: data.reply ?? "", used_a2ui: false, a2ui_messages: [] };
+        renderOutputIntoBubble(pendingBubble, standardized);
+
+        if (Array.isArray(standardized.validation_warnings) && standardized.validation_warnings.length > 0) {
+            addLog("WARN", "A2UI", "Fallback to plain text after A2UI validation warning.", standardized.validation_warnings);
+        }
+
+        addLog("INFO", logSource, "Received standardized reply.", {
             sessionId: data.session_id,
             historyLength: data.history_length,
             model: data.model || effectiveDisplay,
-            pinned: Boolean(data.pinned),
-            visionUsed: Boolean(data.vision_used),
-            documentUsed: Boolean(data.document_used),
+            usedA2ui: Boolean(standardized.used_a2ui),
+            rawFormat: standardized.raw_format,
+            a2uiMessages: (standardized.a2ui_messages || []).length,
         });
     } catch (err) {
         pendingBubble.classList.remove("pending");
@@ -832,6 +881,48 @@ async function handleSend(event) {
         messageInput.focus();
         scrollToBottom();
     }
+}
+
+async function handleSend(event) {
+    event.preventDefault();
+
+    const rawText = messageInput.value.trim();
+    const attached = pendingAttachment;
+
+    if ((!rawText && !attached) || isSending || isUploading) {
+        return;
+    }
+
+    const isVision = Boolean(attached && attached.kind === "image");
+    let promptText = rawText;
+    if (!promptText) {
+        promptText = isVision
+            ? "Describe this image in detail."
+            : "Summarize this document and list its key points.";
+    }
+
+    if (currentSettings.provider === "ollama") {
+        appendMessage("user", promptText, "", attached);
+        messageInput.value = "";
+        autoResizeInput();
+        clearPendingAttachment();
+        updateSendButtonState();
+        appendMessage(
+            "assistant",
+            "Ollama inference is scheduled for Milestone 9. Please switch provider to OpenRouter in Settings to chat or analyze files now.",
+            "error"
+        );
+        addLog("WARN", "CHAT", "Blocked send while Ollama selected (Ollama chat lands in Milestone 9).");
+        return;
+    }
+
+    messageInput.value = "";
+    autoResizeInput();
+    if (attached) {
+        clearPendingAttachment();
+    }
+
+    await sendChatRequest({ promptText, attached });
 }
 
 // ---------------------------
@@ -878,6 +969,7 @@ removeAttachmentBtn.addEventListener("click", () => {
 
 chatForm.addEventListener("submit", handleSend);
 
+a2uiDemoBtn.addEventListener("click", runA2uiShowcaseDemo);
 newChatBtn.addEventListener("click", startNewChat);
 settingsBtn.addEventListener("click", openSettingsPage);
 backToChatBtn.addEventListener("click", () => {

@@ -5,3 +5,4 @@ python-dotenv==1.0.1
 python-multipart==0.0.20
 pillow==11.1.0
 pypdf==5.1.0
+a2ui-agent-sdk==0.12.1

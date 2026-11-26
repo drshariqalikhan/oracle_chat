@@ -20,6 +20,16 @@
                 </span>
 
                 <button
+                    id="a2ui-demo-btn"
+                    class="icon-button"
+                    type="button"
+                    aria-label="Test all 18 A2UI elements"
+                    title="Render A2UI 18-Element Showcase"
+                >
+                    <span class="btn-label">A2UI Demo</span>
+                </button>
+
+                <button
                     id="new-chat-btn"
                     class="icon-button"
                     type="button"
@@ -70,7 +80,7 @@
             <main id="chat-history" class="chat-history" aria-live="polite">
                 <div id="empty-state" class="empty-state">
                     <h2>How can I help you today?</h2>
-                    <p>Send a message, upload an image for vision analysis, or attach a PDF/TXT document to ask questions about it.</p>
+                    <p>Send a message, attach an image or PDF/TXT, or click <strong>A2UI Demo</strong> in the header to test all 18 standardized A2UI elements.</p>
                 </div>
             </main>
 
@@ -112,11 +122,16 @@
                         placeholder="Message ORACLE CHAT or attach an image / PDF / TXT..."
                         aria-label="Message input"
                     ></textarea>
+                    <select id="ui-mode-select" class="ui-mode-select" aria-label="Output format mode" title="Output format mode">
+                        <option value="auto">Auto UI</option>
+                        <option value="a2ui">Force A2UI</option>
+                        <option value="text">Plain Text</option>
+                    </select>
                     <button id="send-button" class="send-button" type="submit" disabled aria-label="Send message">
                         Send
                     </button>
                 </form>
-                <p class="input-hint">Enter to send, Shift + Enter for new line. Supported: JPG, JPEG, PNG, WEBP, PDF, TXT.</p>
+                <p class="input-hint">Enter to send, Shift + Enter for new line. Modes: Auto UI / Force A2UI (18 elements) / Plain Text.</p>
             </footer>
         </section>
 
@@ -280,6 +295,7 @@
         </aside>
     </div>
 
+    <script src="/static/js/a2ui_renderer.js"></script>
     <script src="/static/js/app.js"></script>
 </body>
 </html>

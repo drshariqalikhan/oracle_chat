@@ -1,4 +1,22 @@
-from pydantic import BaseModel, model_validator
+from typing import Any, Literal
+
+from pydantic import BaseModel, Field, model_validator
+
+
+class A2uiActionPayload(BaseModel):
+    name: str
+    surface_id: str = "main"
+    source_component_id: str | None = None
+    context: dict[str, Any] = Field(default_factory=dict)
+
+
+class StandardizedLLMOutput(BaseModel):
+    text: str
+    a2ui_messages: list[dict[str, Any]] = Field(default_factory=list)
+    used_a2ui: bool = False
+    ui_mode: Literal["auto", "a2ui", "text"] = "auto"
+    raw_format: Literal["express", "wire_json", "text"] = "text"
+    validation_warnings: list[str] = Field(default_factory=list)
 
 
 class ChatRequest(BaseModel):
@@ -7,6 +25,8 @@ class ChatRequest(BaseModel):
     image_id: str | None = None
     document_id: str | None = None
     document_name: str | None = None
+    ui_mode: Literal["auto", "a2ui", "text"] = "auto"
+    a2ui_action: A2uiActionPayload | None = None
     model: str | None = None
     pinned_model: str | None = None
     pinned_vision_model: str | None = None
@@ -18,11 +38,16 @@ class ChatRequest(BaseModel):
         cleaned_img = (self.image_id or "").strip() or None
         cleaned_doc = (self.document_id or "").strip() or None
 
-        if not cleaned_msg and not cleaned_img and not cleaned_doc:
-            raise ValueError("A message, image_id, or document_id is required.")
+        if not cleaned_msg and not cleaned_img and not cleaned_doc and not self.a2ui_action:
+            raise ValueError("A message, image_id, document_id, or a2ui_action is required.")
 
         if not cleaned_msg:
-            if cleaned_img:
+            if self.a2ui_action:
+                cleaned_msg = (
+                    f"User triggered A2UI action '{self.a2ui_action.name}' on surface "
+                    f"'{self.a2ui_action.surface_id}' with context: {self.a2ui_action.context}"
+                )
+            elif cleaned_img:
                 cleaned_msg = "Describe this image in detail."
             elif cleaned_doc:
                 cleaned_msg = "Summarize this document and list its key points."
@@ -36,6 +61,7 @@ class ChatRequest(BaseModel):
 
 class ChatResponse(BaseModel):
     reply: str
+    output: StandardizedLLMOutput
     session_id: str
     history_length: int
     model: str | None = None
