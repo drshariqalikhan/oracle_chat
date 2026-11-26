@@ -20,6 +20,18 @@ class StandardizedLLMOutput(BaseModel):
     validation_warnings: list[str] = Field(default_factory=list)
 
 
+class SessionSummary(BaseModel):
+    id: str
+    title: str
+    created_at: str
+    updated_at: str
+    message_count: int
+
+
+class SessionListResponse(BaseModel):
+    sessions: list[SessionSummary]
+
+
 class ChatRequest(BaseModel):
     message: str = ""
     session_id: str | None = None
@@ -78,6 +90,7 @@ class ChatResponse(BaseModel):
 
 class ChatHistoryResponse(BaseModel):
     session_id: str
+    title: str = "Chat"
     messages: list[dict[str, str]]
 
 

@@ -14,6 +14,13 @@ const DEFAULT_SETTINGS = {
 const IMAGE_EXTENSIONS = [".jpg", ".jpeg", ".png", ".webp"];
 const DOC_EXTENSIONS = [".pdf", ".txt"];
 
+// DOM Elements - Sidebar & Sessions
+const chatSidebar = document.getElementById("chat-sidebar");
+const sidebarToggleBtn = document.getElementById("sidebar-toggle-btn");
+const sidebarCloseBtn = document.getElementById("sidebar-close-btn");
+const sidebarNewChatBtn = document.getElementById("sidebar-new-chat-btn");
+const sessionList = document.getElementById("session-list");
+
 // DOM Elements - Chat
 const chatView = document.getElementById("chat-view");
 const settingsView = document.getElementById("settings-view");
@@ -78,7 +85,7 @@ let isUploading = false;
 let pendingAttachment = null;
 
 // ---------------------------
-// Event & Error Logging
+// Logging
 // ---------------------------
 function formatTimestamp(date = new Date()) {
     return date.toTimeString().split(" ")[0];
@@ -114,12 +121,8 @@ function formatLogLine(entry) {
 
 function renderLogs() {
     const filtered = logEntries.filter((entry) => {
-        if (activeLogFilter === "error") {
-            return entry.level === "ERROR";
-        }
-        if (activeLogFilter === "event") {
-            return entry.level !== "ERROR";
-        }
+        if (activeLogFilter === "error") return entry.level === "ERROR";
+        if (activeLogFilter === "event") return entry.level !== "ERROR";
         return true;
     });
 
@@ -138,16 +141,13 @@ function renderLogs() {
         line.textContent = formatLogLine(entry);
         logOutput.appendChild(line);
     }
-
     logOutput.scrollTop = logOutput.scrollHeight;
 }
 
 function toggleLogDrawer(forceOpen = null) {
     const shouldOpen = forceOpen !== null ? forceOpen : logDrawer.classList.contains("hidden");
     logDrawer.classList.toggle("hidden", !shouldOpen);
-    if (shouldOpen) {
-        renderLogs();
-    }
+    if (shouldOpen) renderLogs();
 }
 
 async function copyLogsToClipboard() {
@@ -165,29 +165,14 @@ async function copyLogsToClipboard() {
         }
         const original = copyLogsBtn.textContent;
         copyLogsBtn.textContent = "Copied!";
-        addLog("INFO", "LOGS", `Copied ${logEntries.length} log entries to clipboard.`);
-        setTimeout(() => {
-            copyLogsBtn.textContent = original;
-        }, 1500);
+        setTimeout(() => { copyLogsBtn.textContent = original; }, 1500);
     } catch (err) {
-        addLog("ERROR", "LOGS", "Failed to copy logs to clipboard.", err.message);
+        addLog("ERROR", "LOGS", "Failed to copy logs.", err.message);
     }
 }
 
-window.addEventListener("error", (event) => {
-    addLog("ERROR", "WINDOW", event.message || "Uncaught JS error", {
-        file: event.filename,
-        line: event.lineno,
-    });
-});
-
-window.addEventListener("unhandledrejection", (event) => {
-    const reason = event.reason instanceof Error ? event.reason.message : String(event.reason);
-    addLog("ERROR", "PROMISE", "Unhandled promise rejection", reason);
-});
-
 // ---------------------------
-// Session Management
+// Multi-Session Management (SQLite)
 // ---------------------------
 function generateClientSessionId() {
     if (window.crypto && typeof window.crypto.randomUUID === "function") {
@@ -199,9 +184,7 @@ function generateClientSessionId() {
 function loadOrCreateSessionId() {
     try {
         const existing = localStorage.getItem(SESSION_STORAGE_KEY);
-        if (existing && existing.trim()) {
-            return existing.trim();
-        }
+        if (existing && existing.trim()) return existing.trim();
         const created = generateClientSessionId();
         localStorage.setItem(SESSION_STORAGE_KEY, created);
         return created;
@@ -210,18 +193,89 @@ function loadOrCreateSessionId() {
     }
 }
 
-async function startNewChat() {
-    if (isSending || isUploading) {
-        return;
+async function fetchAndRenderSessions() {
+    try {
+        const resp = await fetch("/chat/sessions");
+        if (!resp.ok) return;
+        const data = await resp.json();
+        const sessions = data.sessions || [];
+
+        sessionList.innerHTML = "";
+        if (sessions.length === 0) {
+            const empty = document.createElement("div");
+            empty.className = "session-item";
+            empty.textContent = "No saved chats yet.";
+            sessionList.appendChild(empty);
+            return;
+        }
+
+        sessions.forEach((s) => {
+            const item = document.createElement("div");
+            item.className = `session-item ${s.id === currentSessionId ? "active" : ""}`;
+            item.dataset.sessionId = s.id;
+
+            const titleSpan = document.createElement("span");
+            titleSpan.className = "session-item-title";
+            titleSpan.textContent = s.title || "New Chat";
+            titleSpan.title = s.title;
+
+            const delBtn = document.createElement("button");
+            delBtn.className = "session-delete-btn";
+            delBtn.innerHTML = "&times;";
+            delBtn.title = "Delete chat";
+            delBtn.addEventListener("click", async (e) => {
+                e.stopPropagation();
+                await deleteSession(s.id);
+            });
+
+            item.appendChild(titleSpan);
+            item.appendChild(delBtn);
+
+            item.addEventListener("click", () => {
+                switchSession(s.id);
+            });
+
+            sessionList.appendChild(item);
+        });
+    } catch (err) {
+        addLog("WARN", "SESSION", "Could not load sessions list.", err.message);
+    }
+}
+
+async function switchSession(sessionId) {
+    if (isSending || isUploading) return;
+    currentSessionId = sessionId;
+    localStorage.setItem(SESSION_STORAGE_KEY, sessionId);
+
+    clearPendingAttachment();
+    closeSettingsPage();
+    if (window.innerWidth <= 768) {
+        chatSidebar.classList.add("collapsed");
     }
 
+    await restoreSessionHistory();
+    fetchAndRenderSessions();
+}
+
+async function deleteSession(sessionId) {
+    try {
+        await fetch(`/chat/sessions/${encodeURIComponent(sessionId)}`, { method: "DELETE" });
+        addLog("INFO", "SESSION", `Deleted session: ${sessionId}`);
+        if (currentSessionId === sessionId) {
+            await startNewChat();
+        } else {
+            await fetchAndRenderSessions();
+        }
+    } catch (err) {
+        addLog("ERROR", "SESSION", "Failed to delete session.", err.message);
+    }
+}
+
+async function startNewChat() {
+    if (isSending || isUploading) return;
     const previousSessionId = currentSessionId;
     currentSessionId = generateClientSessionId();
-    try {
-        localStorage.setItem(SESSION_STORAGE_KEY, currentSessionId);
-    } catch (err) {
-        // Ignore storage errors
-    }
+    localStorage.setItem(SESSION_STORAGE_KEY, currentSessionId);
 
     clearPendingAttachment();
     chatHistory.innerHTML = "";
@@ -229,39 +283,33 @@ async function startNewChat() {
     closeSettingsPage();
     messageInput.focus();
 
-    try {
-        await fetch(`/chat/history/${encodeURIComponent(previousSessionId)}`, {
-            method: "DELETE",
-        });
-    } catch (err) {
-        // Ignore cleanup errors
+    if (window.innerWidth <= 768) {
+        chatSidebar.classList.add("collapsed");
     }
 
     addLog("INFO", "SESSION", "Started new chat session.", {
         previousSessionId,
         newSessionId: currentSessionId,
     });
+    fetchAndRenderSessions();
 }
 
 async function restoreSessionHistory() {
     try {
         const response = await fetch(`/chat/history/${encodeURIComponent(currentSessionId)}`);
-        if (!response.ok) {
-            return;
-        }
+        if (!response.ok) return;
         const data = await response.json();
         const messages = data.messages || [];
-        if (messages.length > 0) {
-            chatHistory.innerHTML = "";
+
+        chatHistory.innerHTML = "";
+        if (messages.length === 0) {
+            chatHistory.appendChild(emptyStateTemplate.cloneNode(true));
+        } else {
             for (const msg of messages) {
                 if (msg.role === "user" || msg.role === "assistant") {
                     appendMessage(msg.role, msg.content || "");
                 }
             }
-            addLog("INFO", "SESSION", "Restored session conversation history.", {
-                sessionId: currentSessionId,
-                messagesCount: messages.length,
-            });
         }
     } catch (err) {
         addLog("WARN", "SESSION", "Could not restore session history.", err.message);
@@ -269,18 +317,13 @@ async function restoreSessionHistory() {
 }
 
 // ---------------------------
-// Settings Management
+// Settings
 // ---------------------------
 function loadSettings() {
     try {
         const raw = localStorage.getItem(STORAGE_KEY);
-        if (!raw) {
-            return { ...DEFAULT_SETTINGS };
-        }
+        if (!raw) return { ...DEFAULT_SETTINGS };
         const parsed = JSON.parse(raw);
-        if (parsed.openrouterModel === "google/gemma-4-31b-it:free") {
-            parsed.openrouterModel = DEFAULT_SETTINGS.openrouterModel;
-        }
         if (typeof parsed.ollamaBaseUrl === "string" && parsed.ollamaBaseUrl.includes(".cloudshell.dev")) {
             parsed.ollamaBaseUrl = "";
         }
@@ -295,9 +338,7 @@ function saveSettingsToStorage(settings) {
 }
 
 function getActiveModelName(settings) {
-    if (settings.provider === "ollama") {
-        return settings.ollamaModel || "not selected";
-    }
+    if (settings.provider === "ollama") return settings.ollamaModel || "not selected";
     if (settings.openrouterModel === "openrouter/free" && settings.pinnedOpenRouterModel) {
         return `${settings.pinnedOpenRouterModel} (pinned)`;
     }
@@ -356,7 +397,6 @@ function openSettingsPage() {
     settingsSaveFeedback.classList.add("hidden");
     chatView.classList.add("hidden");
     settingsView.classList.remove("hidden");
-    addLog("INFO", "UI", "Opened Settings page.");
 }
 
 function closeSettingsPage() {
@@ -366,36 +406,19 @@ function closeSettingsPage() {
 }
 
 function formatBytes(bytes) {
-    if (!bytes || Number.isNaN(bytes)) {
-        return "";
-    }
+    if (!bytes || Number.isNaN(bytes)) return "";
     const gb = bytes / (1024 ** 3);
-    if (gb >= 1) {
-        return `${gb.toFixed(1)} GB`;
-    }
+    if (gb >= 1) return `${gb.toFixed(1)} GB`;
     const mb = bytes / (1024 ** 2);
-    if (mb >= 1) {
-        return `${mb.toFixed(1)} MB`;
-    }
+    if (mb >= 1) return `${mb.toFixed(1)} MB`;
     return `${Math.max(1, Math.round(bytes / 1024))} KB`;
 }
 
 async function discoverOllamaModels() {
     let baseUrl = ollamaBaseUrlInput.value.trim();
-    if (baseUrl.includes(".cloudshell.dev")) {
-        baseUrl = "";
-        ollamaBaseUrlInput.value = "";
-        addLog("INFO", "OLLAMA", "Cleared Cloud Shell preview URL; using backend local OLLAMA_BASE_URL.");
-    }
-
     discoverOllamaBtn.disabled = true;
     discoverOllamaBtn.textContent = "Scanning...";
-    showStatusBanner(
-        ollamaDiscoveryStatus,
-        `Contacting Ollama (${baseUrl || "backend local default"})...`,
-        "info"
-    );
-    addLog("INFO", "OLLAMA", `Starting dynamic model discovery (${baseUrl || "backend default"})`);
+    showStatusBanner(ollamaDiscoveryStatus, "Contacting Ollama...", "info");
 
     try {
         const endpoint = baseUrl
@@ -404,10 +427,7 @@ async function discoverOllamaModels() {
         const response = await fetch(endpoint);
         const data = await response.json();
 
-        if (!response.ok) {
-            const detail = data.detail || `HTTP ${response.status}`;
-            throw new Error(detail);
-        }
+        if (!response.ok) throw new Error(data.detail || `HTTP ${response.status}`);
 
         ollamaModelSelect.innerHTML = "";
         if (!data.models || data.models.length === 0) {
@@ -415,12 +435,7 @@ async function discoverOllamaModels() {
             emptyOpt.value = "";
             emptyOpt.textContent = "-- No local models found in Ollama --";
             ollamaModelSelect.appendChild(emptyOpt);
-            showStatusBanner(
-                ollamaDiscoveryStatus,
-                `Connected to Ollama at ${data.base_url}, but 0 models were returned. Pull a model first.`,
-                "info"
-            );
-            addLog("WARN", "OLLAMA", "Connected to Ollama, 0 models installed.", data.base_url);
+            showStatusBanner(ollamaDiscoveryStatus, "Connected, 0 models found.", "info");
             return;
         }
 
@@ -436,25 +451,9 @@ async function discoverOllamaModels() {
         const hasPreferred = data.models.some((m) => m.name === preferred);
         ollamaModelSelect.value = hasPreferred ? preferred : data.models[0].name;
         ollamaCustomModelInput.value = ollamaModelSelect.value;
-
-        showStatusBanner(
-            ollamaDiscoveryStatus,
-            `Discovered ${data.count} Ollama model(s) at ${data.base_url}.`,
-            "success"
-        );
-        addLog(
-            "INFO",
-            "OLLAMA",
-            `Discovered ${data.count} model(s).`,
-            data.models.map((m) => m.name).join(", ")
-        );
+        showStatusBanner(ollamaDiscoveryStatus, `Discovered ${data.count} model(s).`, "success");
     } catch (err) {
-        showStatusBanner(
-            ollamaDiscoveryStatus,
-            `Discovery failed: ${err.message}. Open Logs for troubleshooting details.`,
-            "error"
-        );
-        addLog("ERROR", "OLLAMA", "Model discovery failed.", err.message);
+        showStatusBanner(ollamaDiscoveryStatus, `Discovery failed: ${err.message}`, "error");
     } finally {
         discoverOllamaBtn.disabled = false;
         discoverOllamaBtn.textContent = "Discover Models";
@@ -468,29 +467,20 @@ async function clearPinnedModel() {
     pinnedFreeModelInput.value = "";
     pinnedVisionModelInput.value = "";
     updateHeaderBadge();
-
     try {
         await fetch("/chat/reset-model", { method: "POST" });
-        showStatusBanner(
-            settingsSaveFeedback,
-            "Pinned free text & vision models cleared. Next requests will ask openrouter/free to assign new models.",
-            "info"
-        );
-        addLog("INFO", "SETTINGS", "Cleared pinned OpenRouter text & vision models.");
-    } catch (err) {
-        addLog("WARN", "SETTINGS", "Cleared browser pins; backend reset failed.", err.message);
-    }
+        showStatusBanner(settingsSaveFeedback, "Pinned models cleared.", "info");
+    } catch (err) {}
 }
 
 // ---------------------------
-// Image & Document Upload Preview
+// Attachments
 // ---------------------------
 function clearPendingAttachment() {
     pendingAttachment = null;
     attachmentFileInput.value = "";
     attachmentThumb.src = "";
     attachmentThumb.classList.add("hidden");
-    attachmentDocBadge.textContent = "DOC";
     attachmentDocBadge.classList.add("hidden");
     attachmentName.textContent = "";
     attachmentDetails.textContent = "";
@@ -512,91 +502,36 @@ function showPendingImage(imageInfo) {
 function showPendingDocument(docInfo) {
     pendingAttachment = { kind: "document", data: docInfo };
     attachmentThumb.classList.add("hidden");
-    attachmentThumb.src = "";
     attachmentDocBadge.textContent = (docInfo.file_type || "DOC").toUpperCase();
     attachmentDocBadge.classList.remove("hidden");
     attachmentName.textContent = docInfo.original_filename;
-    const truncNote = docInfo.truncated ? " · truncated" : "";
-    attachmentDetails.textContent = `${docInfo.page_count} page(s) · ${docInfo.char_count.toLocaleString()} chars · ${formatBytes(docInfo.size_bytes)}${truncNote}`;
+    const trunc = docInfo.truncated ? " · truncated" : "";
+    attachmentDetails.textContent = `${docInfo.page_count} page(s) · ${docInfo.char_count.toLocaleString()} chars${trunc}`;
     attachmentPreview.classList.remove("hidden");
     updateSendButtonState();
 }
 
-function getFileExtension(filename) {
-    const idx = filename.lastIndexOf(".");
-    return idx >= 0 ? filename.slice(idx).toLowerCase() : "";
-}
-
 async function handleAttachmentSelected(file) {
-    if (!file || isUploading || isSending) {
-        return;
-    }
-
-    const ext = getFileExtension(file.name);
-    const isImage = IMAGE_EXTENSIONS.includes(ext) || file.type.startsWith("image/");
+    if (!file || isUploading || isSending) return;
+    const ext = "." + file.name.split(".").pop().toLowerCase();
     const isDoc = DOC_EXTENSIONS.includes(ext);
-
-    if (!isImage && !isDoc) {
-        const msg = `Unsupported file "${file.name}". Allowed: JPG, JPEG, PNG, WEBP, PDF, TXT.`;
-        appendMessage("assistant", msg, "error");
-        addLog("ERROR", "UPLOAD", msg);
-        attachmentFileInput.value = "";
-        return;
-    }
-
     const endpoint = isDoc ? "/upload/document" : "/upload/image";
+
     isUploading = true;
     attachFileBtn.disabled = true;
     updateSendButtonState();
 
-    addLog("INFO", "UPLOAD", `Uploading ${isDoc ? "document" : "image"}...`, {
-        filename: file.name,
-        size: file.size,
-        endpoint,
-    });
-
     try {
         const formData = new FormData();
         formData.append("file", file);
-
-        const response = await fetch(endpoint, {
-            method: "POST",
-            body: formData,
-        });
-
-        let data = null;
-        try {
-            data = await response.json();
-        } catch (parseErr) {
-            throw new Error(`Invalid JSON response (HTTP ${response.status})`);
-        }
-
-        if (!response.ok) {
-            throw new Error(extractApiErrorMessage(data, response.status));
-        }
-
-        if (isDoc) {
-            showPendingDocument(data);
-            addLog("INFO", "UPLOAD", "Document uploaded & text extracted.", {
-                fileId: data.file_id,
-                fileType: data.file_type,
-                pages: data.page_count,
-                chars: data.char_count,
-                truncated: data.truncated,
-            });
-        } else {
-            showPendingImage(data);
-            addLog("INFO", "UPLOAD", "Image uploaded and stored.", {
-                fileId: data.file_id,
-                url: data.url,
-                dimensions: `${data.width}x${data.height}`,
-                sizeBytes: data.size_bytes,
-            });
-        }
+        const response = await fetch(endpoint, { method: "POST", body: formData });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.detail || `HTTP ${response.status}`);
+        if (isDoc) showPendingDocument(data);
+        else showPendingImage(data);
     } catch (err) {
         clearPendingAttachment();
         appendMessage("assistant", `Upload failed: ${err.message}`, "error");
-        addLog("ERROR", "UPLOAD", "File upload failed.", err.message);
     } finally {
         isUploading = false;
         attachFileBtn.disabled = false;
@@ -605,7 +540,7 @@ async function handleAttachmentSelected(file) {
 }
 
 // ---------------------------
-// Chat UI & Standardized Pydantic + A2UI Rendering
+// Chat UI
 // ---------------------------
 function updateSendButtonState() {
     const hasText = messageInput.value.trim().length > 0;
@@ -624,20 +559,12 @@ function scrollToBottom() {
 
 function renderOutputIntoBubble(bubble, output) {
     bubble.innerHTML = "";
-    const text = output && output.text ? output.text : "";
-    if (text) {
+    if (output && output.text) {
         const textNode = document.createElement("div");
-        textNode.textContent = text;
+        textNode.textContent = output.text;
         bubble.appendChild(textNode);
     }
-
-    if (
-        output &&
-        output.used_a2ui &&
-        Array.isArray(output.a2ui_messages) &&
-        output.a2ui_messages.length > 0 &&
-        window.OracleA2uiRenderer
-    ) {
+    if (output && output.used_a2ui && window.OracleA2uiRenderer) {
         const surfaceRoot = window.OracleA2uiRenderer.renderA2uiMessages(
             output.a2ui_messages,
             handleA2uiAction
@@ -648,9 +575,7 @@ function renderOutputIntoBubble(bubble, output) {
 
 function appendMessage(role, text, extraClass = "", attachment = null, output = null) {
     const emptyEl = document.getElementById("empty-state");
-    if (emptyEl && emptyEl.parentNode) {
-        emptyEl.remove();
-    }
+    if (emptyEl) emptyEl.remove();
 
     const row = document.createElement("div");
     row.className = `message-row ${role}`;
@@ -666,90 +591,47 @@ function appendMessage(role, text, extraClass = "", attachment = null, output = 
         const img = document.createElement("img");
         img.className = "chat-image-preview";
         img.src = attachment.data.url;
-        img.alt = attachment.data.original_filename || "Uploaded image";
         bubble.appendChild(img);
-
-        const caption = document.createElement("span");
-        caption.className = "chat-image-caption";
-        caption.textContent = `${attachment.data.original_filename} (${attachment.data.width}x${attachment.data.height})`;
-        bubble.appendChild(caption);
     } else if (attachment && attachment.kind === "document") {
         const pill = document.createElement("div");
         pill.className = "chat-doc-pill";
-
-        const tag = document.createElement("span");
-        tag.className = "chat-doc-tag";
-        tag.textContent = attachment.data.file_type || "DOC";
-
-        const name = document.createElement("span");
-        name.textContent = `${attachment.data.original_filename} (${attachment.data.page_count}p · ${attachment.data.char_count.toLocaleString()} chars)`;
-
-        pill.appendChild(tag);
-        pill.appendChild(name);
+        pill.textContent = `[${(attachment.data.file_type || "DOC").toUpperCase()}] ${attachment.data.original_filename}`;
         bubble.appendChild(pill);
     }
 
-    if (output) {
-        renderOutputIntoBubble(bubble, output);
-    } else if (text) {
-        const textNode = document.createElement("div");
-        textNode.textContent = text;
-        bubble.appendChild(textNode);
+    if (output) renderOutputIntoBubble(bubble, output);
+    else if (text) {
+        const t = document.createElement("div");
+        t.textContent = text;
+        bubble.appendChild(t);
     }
 
     row.appendChild(roleLabel);
     row.appendChild(bubble);
     chatHistory.appendChild(row);
     scrollToBottom();
-
     return bubble;
 }
 
-function extractApiErrorMessage(data, statusCode) {
-    if (!data) {
-        return `HTTP ${statusCode}`;
-    }
-    if (typeof data.detail === "string") {
-        return data.detail;
-    }
-    if (Array.isArray(data.detail) && data.detail.length > 0) {
-        return data.detail.map((item) => item.msg || JSON.stringify(item)).join("; ");
-    }
-    return `HTTP ${statusCode}`;
-}
-
-async function runA2uiShowcaseDemo() {
-    closeSettingsPage();
-    addLog("INFO", "A2UI", "Requesting 18-element A2UI showcase from /api/a2ui/showcase...");
-    try {
-        const response = await fetch("/api/a2ui/showcase");
-        const data = await response.json();
-        if (!response.ok) {
-            throw new Error(extractApiErrorMessage(data, response.status));
-        }
-        appendMessage("assistant", "", "", null, data.output);
-        addLog("INFO", "A2UI", "Rendered A2UI 18-element showcase.", {
-            componentCount: data.component_count,
-            components: data.components_supported,
-        });
-    } catch (err) {
-        appendMessage("assistant", `A2UI Demo error: ${err.message}`, "error");
-        addLog("ERROR", "A2UI", "Failed to load A2UI showcase.", err.message);
-    }
-}
-
 async function handleA2uiAction(actionPayload) {
-    addLog("INFO", "A2UI_ACTION", `Triggered action '${actionPayload.name}'`, actionPayload);
-    if (isSending || isUploading) {
-        return;
-    }
-
+    if (isSending || isUploading) return;
     const actionMessage = `UI Action "${actionPayload.name}" submitted with values: ${JSON.stringify(actionPayload.context)}`;
     await sendChatRequest({
         promptText: actionMessage,
         a2uiAction: actionPayload,
         userDisplayText: `[A2UI Action: ${actionPayload.name}] ${JSON.stringify(actionPayload.context)}`,
     });
+}
+
+async function runA2uiShowcaseDemo() {
+    closeSettingsPage();
+    try {
+        const response = await fetch("/api/a2ui/showcase");
+        const data = await response.json();
+        appendMessage("assistant", "", "", null, data.output);
+    } catch (err) {
+        appendMessage("assistant", `Showcase error: ${err.message}`, "error");
+    }
 }
 
 async function sendChatRequest({
@@ -764,30 +646,19 @@ async function sendChatRequest({
     const activeProvider = currentSettings.provider || "openrouter";
 
     appendMessage("user", userDisplayText || promptText, "", attached);
-
     isSending = true;
     updateSendButtonState();
 
-    const routerModel =
-        activeProvider === "ollama"
-            ? currentSettings.ollamaModel
-            : currentSettings.openrouterModel || DEFAULT_SETTINGS.openrouterModel;
+    const routerModel = activeProvider === "ollama"
+        ? currentSettings.ollamaModel
+        : currentSettings.openrouterModel || DEFAULT_SETTINGS.openrouterModel;
 
-    const activePin =
-        activeProvider === "openrouter" && routerModel === "openrouter/free"
-            ? isVision
-                ? currentSettings.pinnedVisionModel
-                : currentSettings.pinnedOpenRouterModel
-            : "";
+    const activePin = activeProvider === "openrouter" && routerModel === "openrouter/free"
+        ? isVision ? currentSettings.pinnedVisionModel : currentSettings.pinnedOpenRouterModel
+        : "";
 
     const effectiveDisplay = activePin || routerModel || activeProvider;
-
-    const statusText = isVision
-        ? `Analyzing image (${effectiveDisplay})...`
-        : isDocument
-          ? `Reading document (${effectiveDisplay})...`
-          : `Thinking (${effectiveDisplay})...`;
-    const pendingBubble = appendMessage("assistant", statusText, "pending");
+    const pendingBubble = appendMessage("assistant", `Thinking (${effectiveDisplay})...`, "pending");
 
     const requestBody = {
         message: promptText,
@@ -796,116 +667,53 @@ async function sendChatRequest({
         model: routerModel,
         ui_mode: uiMode,
     };
-    if (isVision) {
-        requestBody.image_id = attached.data.file_id;
-    }
+    if (isVision) requestBody.image_id = attached.data.file_id;
     if (isDocument) {
         requestBody.document_id = attached.data.file_id;
         requestBody.document_name = attached.data.original_filename;
     }
-    if (a2uiAction) {
-        requestBody.a2ui_action = a2uiAction;
-    }
+    if (a2uiAction) requestBody.a2ui_action = a2uiAction;
     if (activeProvider === "openrouter") {
-        if (routerModel === "openrouter/free") {
-            if (isVision && currentSettings.pinnedVisionModel) {
-                requestBody.pinned_vision_model = currentSettings.pinnedVisionModel;
-            } else if (!isVision && currentSettings.pinnedOpenRouterModel) {
-                requestBody.pinned_model = currentSettings.pinnedOpenRouterModel;
-            }
-        }
-        if (currentSettings.openrouterApiKey) {
-            requestBody.api_key = currentSettings.openrouterApiKey;
-        }
+        if (currentSettings.openrouterApiKey) requestBody.api_key = currentSettings.openrouterApiKey;
     } else if (activeProvider === "ollama" && currentSettings.ollamaBaseUrl) {
         requestBody.ollama_base_url = currentSettings.ollamaBaseUrl;
     }
 
-    const logSource = isVision ? "VISION" : isDocument ? "DOCUMENT" : "CHAT";
-    addLog("INFO", logSource, "POST /chat request sent.", {
-        sessionId: currentSessionId,
-        provider: activeProvider,
-        model: routerModel || null,
-        uiMode,
-        vision: isVision,
-        document: isDocument,
-        hasAction: Boolean(a2uiAction),
-        pinnedModel: activePin || null,
-    });
-
     try {
         const response = await fetch("/chat", {
             method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-            },
+            headers: { "Content-Type": "application/json" },
             body: JSON.stringify(requestBody),
         });
 
-        let data = null;
-        try {
-            data = await response.json();
-        } catch (parseErr) {
-            throw new Error(`Invalid JSON response (HTTP ${response.status})`);
-        }
-
-        if (!response.ok) {
-            throw new Error(extractApiErrorMessage(data, response.status));
-        }
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.detail || `HTTP ${response.status}`);
 
         if (data.session_id) {
             currentSessionId = data.session_id;
             localStorage.setItem(SESSION_STORAGE_KEY, currentSessionId);
         }
 
-        if (
-            activeProvider === "openrouter" &&
-            routerModel === "openrouter/free" &&
-            data.model &&
-            data.model !== "openrouter/free"
-        ) {
-            if (data.vision_used) {
-                if (currentSettings.pinnedVisionModel !== data.model) {
-                    currentSettings.pinnedVisionModel = data.model;
-                    saveSettingsToStorage(currentSettings);
-                    pinnedVisionModelInput.value = data.model;
-                    addLog("INFO", "OPENROUTER", `Assigned & pinned free vision model: ${data.model}`);
-                }
-            } else if (currentSettings.pinnedOpenRouterModel !== data.model) {
+        if (activeProvider === "openrouter" && routerModel === "openrouter/free" && data.model) {
+            if (data.vision_used && currentSettings.pinnedVisionModel !== data.model) {
+                currentSettings.pinnedVisionModel = data.model;
+                saveSettingsToStorage(currentSettings);
+                pinnedVisionModelInput.value = data.model;
+            } else if (!data.vision_used && currentSettings.pinnedOpenRouterModel !== data.model) {
                 currentSettings.pinnedOpenRouterModel = data.model;
                 saveSettingsToStorage(currentSettings);
                 pinnedFreeModelInput.value = data.model;
                 updateHeaderBadge();
-                addLog("INFO", "OPENROUTER", `Assigned & pinned free model: ${data.model}`);
             }
         }
 
         pendingBubble.classList.remove("pending");
-        const standardized = data.output || { text: data.reply ?? "", used_a2ui: false, a2ui_messages: [] };
-        renderOutputIntoBubble(pendingBubble, standardized);
-
-        if (standardized.repair_retried && standardized.used_a2ui) {
-            addLog("INFO", "A2UI", "Auto-repaired A2UI syntax on 1-retry.");
-        }
-        if (Array.isArray(standardized.validation_warnings) && standardized.validation_warnings.length > 0) {
-            addLog("WARN", "A2UI", "Fallback to plain text after A2UI validation warning.", standardized.validation_warnings);
-        }
-
-        addLog("INFO", logSource, "Received standardized reply.", {
-            sessionId: data.session_id,
-            historyLength: data.history_length,
-            provider: data.provider || activeProvider,
-            model: data.model || effectiveDisplay,
-            usedA2ui: Boolean(standardized.used_a2ui),
-            repairRetried: Boolean(standardized.repair_retried),
-            rawFormat: standardized.raw_format,
-            a2uiMessages: (standardized.a2ui_messages || []).length,
-        });
+        renderOutputIntoBubble(pendingBubble, data.output);
+        fetchAndRenderSessions();
     } catch (err) {
         pendingBubble.classList.remove("pending");
         pendingBubble.classList.add("error");
         pendingBubble.textContent = `Error: ${err.message}`;
-        addLog("ERROR", logSource, `${activeProvider} request failed.`, err.message);
     } finally {
         isSending = false;
         updateSendButtonState();
@@ -916,27 +724,17 @@ async function sendChatRequest({
 
 async function handleSend(event) {
     event.preventDefault();
-
     const rawText = messageInput.value.trim();
     const attached = pendingAttachment;
+    if ((!rawText && !attached) || isSending || isUploading) return;
 
-    if ((!rawText && !attached) || isSending || isUploading) {
-        return;
-    }
-
-    const isVision = Boolean(attached && attached.kind === "image");
-    let promptText = rawText;
-    if (!promptText) {
-        promptText = isVision
-            ? "Describe this image in detail."
-            : "Summarize this document and list its key points.";
-    }
+    let promptText = rawText || (attached && attached.kind === "image"
+        ? "Describe this image in detail."
+        : "Summarize this document and list its key points.");
 
     messageInput.value = "";
     autoResizeInput();
-    if (attached) {
-        clearPendingAttachment();
-    }
+    if (attached) clearPendingAttachment();
 
     await sendChatRequest({ promptText, attached });
 }
@@ -949,131 +747,76 @@ messageInput.addEventListener("input", () => {
     updateSendButtonState();
 });
 
-messageInput.addEventListener("keydown", (event) => {
-    if (event.key === "Enter" && !event.shiftKey) {
-        event.preventDefault();
-        if (!sendButton.disabled) {
-            chatForm.requestSubmit();
-        }
+messageInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        if (!sendButton.disabled) chatForm.requestSubmit();
     }
-});
-
-attachFileBtn.addEventListener("click", () => {
-    if (!isUploading && !isSending) {
-        attachmentFileInput.click();
-    }
-});
-
-attachmentFileInput.addEventListener("change", () => {
-    const file = attachmentFileInput.files && attachmentFileInput.files[0];
-    if (file) {
-        handleAttachmentSelected(file);
-    }
-});
-
-removeAttachmentBtn.addEventListener("click", () => {
-    if (pendingAttachment) {
-        addLog(
-            "INFO",
-            "UPLOAD",
-            `Removed attached ${pendingAttachment.kind} before sending.`,
-            pendingAttachment.data.original_filename
-        );
-    }
-    clearPendingAttachment();
 });
 
 chatForm.addEventListener("submit", handleSend);
 
-a2uiDemoBtn.addEventListener("click", runA2uiShowcaseDemo);
-newChatBtn.addEventListener("click", startNewChat);
-settingsBtn.addEventListener("click", openSettingsPage);
-backToChatBtn.addEventListener("click", () => {
-    closeSettingsPage();
-    addLog("INFO", "UI", "Returned to Chat view.");
+sidebarToggleBtn.addEventListener("click", () => {
+    chatSidebar.classList.toggle("collapsed");
 });
 
-providerRadios.forEach((radio) => {
-    radio.addEventListener("change", (event) => {
-        toggleProviderSections(event.target.value);
-        addLog("INFO", "SETTINGS", `Switched provider selection to ${event.target.value}.`);
-    });
+sidebarCloseBtn.addEventListener("click", () => {
+    chatSidebar.classList.add("collapsed");
+});
+
+sidebarNewChatBtn.addEventListener("click", startNewChat);
+newChatBtn.addEventListener("click", startNewChat);
+a2uiDemoBtn.addEventListener("click", runA2uiShowcaseDemo);
+settingsBtn.addEventListener("click", openSettingsPage);
+backToChatBtn.addEventListener("click", closeSettingsPage);
+
+attachFileBtn.addEventListener("click", () => {
+    if (!isUploading && !isSending) attachmentFileInput.click();
+});
+
+attachmentFileInput.addEventListener("change", () => {
+    const file = attachmentFileInput.files && attachmentFileInput.files[0];
+    if (file) handleAttachmentSelected(file);
+});
+
+removeAttachmentBtn.addEventListener("click", clearPendingAttachment);
+
+providerRadios.forEach((r) => {
+    r.addEventListener("change", (e) => toggleProviderSections(e.target.value));
 });
 
 toggleKeyBtn.addEventListener("click", () => {
-    const isHidden = openrouterApiKeyInput.type === "password";
-    openrouterApiKeyInput.type = isHidden ? "text" : "password";
-    toggleKeyBtn.textContent = isHidden ? "Hide" : "Show";
+    const isPwd = openrouterApiKeyInput.type === "password";
+    openrouterApiKeyInput.type = isPwd ? "text" : "password";
+    toggleKeyBtn.textContent = isPwd ? "Hide" : "Show";
 });
 
 discoverOllamaBtn.addEventListener("click", discoverOllamaModels);
 clearPinnedBtn.addEventListener("click", clearPinnedModel);
 
-ollamaModelSelect.addEventListener("change", () => {
-    if (ollamaModelSelect.value) {
-        ollamaCustomModelInput.value = ollamaModelSelect.value;
-    }
-});
-
-settingsForm.addEventListener("submit", (event) => {
-    event.preventDefault();
-
-    const selectedProvider = document.querySelector('input[name="provider"]:checked').value;
-    const enteredOpenRouterModel = openrouterModelInput.value.trim() || DEFAULT_SETTINGS.openrouterModel;
-    const enteredOllamaUrl = ollamaBaseUrlInput.value.trim();
-
-    const updated = {
-        provider: selectedProvider,
+settingsForm.addEventListener("submit", (e) => {
+    e.preventDefault();
+    const provider = document.querySelector('input[name="provider"]:checked').value;
+    currentSettings = {
+        provider,
         openrouterApiKey: openrouterApiKeyInput.value.trim(),
-        openrouterModel: enteredOpenRouterModel,
-        pinnedOpenRouterModel:
-            enteredOpenRouterModel === "openrouter/free"
-                ? currentSettings.pinnedOpenRouterModel
-                : "",
-        pinnedVisionModel:
-            enteredOpenRouterModel === "openrouter/free"
-                ? currentSettings.pinnedVisionModel
-                : "",
-        ollamaBaseUrl: enteredOllamaUrl.includes(".cloudshell.dev") ? "" : enteredOllamaUrl,
+        openrouterModel: openrouterModelInput.value.trim() || DEFAULT_SETTINGS.openrouterModel,
+        pinnedOpenRouterModel: currentSettings.pinnedOpenRouterModel,
+        pinnedVisionModel: currentSettings.pinnedVisionModel,
+        ollamaBaseUrl: ollamaBaseUrlInput.value.trim(),
         ollamaModel: ollamaCustomModelInput.value.trim() || ollamaModelSelect.value,
     };
-
-    if (selectedProvider === "openrouter" && !updated.openrouterApiKey) {
-        addLog("WARN", "SETTINGS", "Saved OpenRouter provider without UI key (will use backend .env if set).");
-    }
-    if (selectedProvider === "ollama" && !updated.ollamaModel) {
-        addLog("WARN", "SETTINGS", "Saved Ollama provider without a selected model.");
-    }
-
-    currentSettings = updated;
     saveSettingsToStorage(currentSettings);
     updateHeaderBadge();
-
-    showStatusBanner(
-        settingsSaveFeedback,
-        `Settings saved (${currentSettings.provider} · ${getActiveModelName(currentSettings)}).`,
-        "success"
-    );
-    addLog("INFO", "SETTINGS", "Settings saved.", {
-        provider: currentSettings.provider,
-        model: getActiveModelName(currentSettings),
-        hasOpenRouterKey: Boolean(currentSettings.openrouterApiKey),
-        ollamaBaseUrl: currentSettings.ollamaBaseUrl || "backend default",
-    });
+    showStatusBanner(settingsSaveFeedback, "Settings saved.", "success");
 });
 
-resetSettingsBtn.addEventListener("click", async () => {
+resetSettingsBtn.addEventListener("click", () => {
     currentSettings = { ...DEFAULT_SETTINGS };
     saveSettingsToStorage(currentSettings);
     populateSettingsForm(currentSettings);
     updateHeaderBadge();
-    try {
-        await fetch("/chat/reset-model", { method: "POST" });
-    } catch (err) {
-        // Ignore network errors during reset
-    }
-    showStatusBanner(settingsSaveFeedback, "Settings reset to defaults (openrouter/free).", "info");
-    addLog("INFO", "SETTINGS", "Settings reset to defaults.");
+    showStatusBanner(settingsSaveFeedback, "Reset to defaults.", "info");
 });
 
 logsToggleBtn.addEventListener("click", () => toggleLogDrawer());
@@ -1082,22 +825,18 @@ closeLogsBtn.addEventListener("click", () => toggleLogDrawer(false));
 copyLogsBtn.addEventListener("click", copyLogsToClipboard);
 clearLogsBtn.addEventListener("click", () => {
     logEntries.length = 0;
-    addLog("INFO", "LOGS", "Log buffer cleared.");
+    renderLogs();
 });
 
 logFilterButtons.forEach((btn) => {
     btn.addEventListener("click", () => {
         activeLogFilter = btn.dataset.filter;
-        logFilterButtons.forEach((item) => item.classList.toggle("active", item === btn));
+        logFilterButtons.forEach((b) => b.classList.toggle("active", b === btn));
         renderLogs();
     });
 });
 
-// Initialize
+// Initialization
 updateHeaderBadge();
-addLog("INFO", "APP", "ORACLE CHAT UI initialized.", {
-    sessionId: currentSessionId,
-    provider: currentSettings.provider,
-    model: getActiveModelName(currentSettings),
-});
 restoreSessionHistory();
+fetchAndRenderSessions();

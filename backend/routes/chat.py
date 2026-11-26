@@ -7,7 +7,14 @@ from backend.config import get_settings
 from backend.llm.base import LLMProvider, LLMProviderError, LLMResponse
 from backend.llm.factory import SUPPORTED_PROVIDERS, create_llm_provider
 from backend.llm.ollama import OllamaProvider
-from backend.models import ChatHistoryResponse, ChatRequest, ChatResponse, StandardizedLLMOutput
+from backend.models import (
+    ChatHistoryResponse,
+    ChatRequest,
+    ChatResponse,
+    SessionListResponse,
+    SessionSummary,
+    StandardizedLLMOutput,
+)
 from backend.services.a2ui_service import ALL_BASIC_COMPONENTS, A2uiService
 from backend.services.file_service import FileService, FileValidationError
 from backend.services.image_service import ImageService, ImageValidationError
@@ -22,7 +29,7 @@ UPLOADS_DIR = Path(__file__).resolve().parent.parent.parent / "uploads"
 _pinned_free_model: str | None = None
 _pinned_vision_model: str | None = None
 
-memory_service = MemoryService(max_messages=40)
+memory_service = MemoryService()
 image_service = ImageService(uploads_dir=UPLOADS_DIR)
 file_service = FileService(uploads_dir=UPLOADS_DIR)
 a2ui_service = A2uiService()
@@ -38,6 +45,29 @@ async def get_provider_config() -> dict[str, Any]:
         "openrouter_configured": bool(settings.openrouter_api_key),
         "supported_providers": list(SUPPORTED_PROVIDERS),
     }
+
+
+@router.get("/chat/sessions", response_model=SessionListResponse)
+async def list_chat_sessions() -> SessionListResponse:
+    raw_list = memory_service.list_sessions()
+    summaries = [SessionSummary(**item) for item in raw_list]
+    return SessionListResponse(sessions=summaries)
+
+
+@router.post("/chat/sessions")
+async def create_new_session() -> dict[str, str]:
+    session_id = memory_service.create_session_id()
+    memory_service.ensure_session(session_id, title="New Chat")
+    return {"status": "ok", "session_id": session_id, "title": "New Chat"}
+
+
+@router.delete("/chat/sessions/{session_id}")
+async def delete_chat_session(session_id: str) -> dict[str, str]:
+    cleaned_id = session_id.strip()
+    if not cleaned_id:
+        raise HTTPException(status_code=400, detail="Session ID cannot be empty.")
+    memory_service.clear_session(cleaned_id)
+    return {"status": "ok", "session_id": cleaned_id}
 
 
 @router.get("/api/ollama/models")
@@ -117,8 +147,11 @@ async def get_chat_history(session_id: str) -> ChatHistoryResponse:
     cleaned_id = session_id.strip()
     if not cleaned_id:
         raise HTTPException(status_code=400, detail="Session ID cannot be empty.")
+    info = memory_service.get_session_info(cleaned_id)
+    title = info["title"] if info else "Chat"
     return ChatHistoryResponse(
         session_id=cleaned_id,
+        title=title,
         messages=memory_service.get_history(cleaned_id),
     )
 
@@ -187,6 +220,7 @@ async def chat(payload: ChatRequest) -> ChatResponse:
 
     settings = get_settings()
     session_id = (payload.session_id or "").strip() or memory_service.create_session_id()
+    memory_service.ensure_session(session_id)
 
     try:
         active_provider, provider = create_llm_provider(
@@ -229,9 +263,16 @@ async def chat(payload: ChatRequest) -> ChatResponse:
         )
 
     prior_messages = memory_service.get_history(session_id)
+    if active_provider == "ollama":
+        prior_messages = prior_messages[-4:]
+
     documents_context = memory_service.get_documents_context(session_id)
     has_document_context = bool(documents_context)
-    a2ui_system_prompt = a2ui_service.build_system_prompt(payload.ui_mode)
+
+    a2ui_system_prompt = a2ui_service.build_system_prompt(
+        payload.ui_mode,
+        provider=active_provider,
+    )
 
     base_history: list[dict[str, Any]] = []
     if a2ui_system_prompt:

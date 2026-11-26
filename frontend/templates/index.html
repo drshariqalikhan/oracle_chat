@@ -7,292 +7,323 @@
     <link rel="stylesheet" href="/static/css/style.css">
 </head>
 <body>
-    <div class="app-shell">
-        <header class="chat-header">
-            <div class="header-brand">
-                <span class="status-dot" aria-hidden="true"></span>
-                <h1>ORACLE CHAT</h1>
-            </div>
-
-            <div class="header-actions">
-                <span id="provider-badge" class="header-badge" title="Active provider and model">
-                    OpenRouter · openrouter/free
-                </span>
-
-                <button
-                    id="a2ui-demo-btn"
-                    class="icon-button"
-                    type="button"
-                    aria-label="Test all 18 A2UI elements"
-                    title="Render A2UI 18-Element Showcase"
-                >
-                    <span class="btn-label">A2UI Demo</span>
-                </button>
-
-                <button
-                    id="new-chat-btn"
-                    class="icon-button"
-                    type="button"
-                    aria-label="Start new chat session"
-                    title="New Chat"
-                >
-                    <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+    <div class="app-layout">
+        <!-- Sidebar for Multi-Chat Sessions -->
+        <aside id="chat-sidebar" class="chat-sidebar" aria-label="Conversation History">
+            <div class="sidebar-header">
+                <button id="sidebar-new-chat-btn" class="sidebar-new-btn" type="button">
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                         <line x1="12" y1="5" x2="12" y2="19"></line>
                         <line x1="5" y1="12" x2="19" y2="12"></line>
                     </svg>
-                    <span class="btn-label">New Chat</span>
+                    <span>New Chat</span>
                 </button>
-
-                <button
-                    id="logs-toggle-btn"
-                    class="icon-button"
-                    type="button"
-                    aria-label="Toggle event and error logs"
-                    title="Event & Error Logs"
-                >
-                    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
-                        <polyline points="14 2 14 8 20 8"></polyline>
-                        <line x1="8" y1="13" x2="16" y2="13"></line>
-                        <line x1="8" y1="17" x2="13" y2="17"></line>
-                    </svg>
-                    <span class="btn-label">Logs</span>
-                    <span id="log-error-badge" class="error-count hidden">0</span>
-                </button>
-
-                <button
-                    id="settings-btn"
-                    class="icon-button"
-                    type="button"
-                    aria-label="Open settings"
-                    title="Settings"
-                >
-                    <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                        <circle cx="12" cy="12" r="3"></circle>
-                        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+                <button id="sidebar-close-btn" class="icon-button mobile-only" type="button" aria-label="Close sidebar">
+                    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="18" y1="6" x2="6" y2="18"></line>
+                        <line x1="6" y1="6" x2="18" y2="18"></line>
                     </svg>
                 </button>
             </div>
-        </header>
+            <div class="sidebar-title">Chats</div>
+            <div id="session-list" class="session-list" role="list"></div>
+        </aside>
 
-        <!-- Chat View -->
-        <section id="chat-view" class="view-container">
-            <main id="chat-history" class="chat-history" aria-live="polite">
-                <div id="empty-state" class="empty-state">
-                    <h2>How can I help you today?</h2>
-                    <p>Send a message, attach an image or PDF/TXT, or click <strong>A2UI Demo</strong> in the header to test all 18 standardized A2UI elements.</p>
-                </div>
-            </main>
-
-            <footer class="chat-input-area">
-                <div id="attachment-preview" class="attachment-preview hidden">
-                    <img id="attachment-thumb" class="attachment-thumb hidden" src="" alt="Uploaded preview">
-                    <div id="attachment-doc-badge" class="attachment-doc-badge hidden" aria-hidden="true">DOC</div>
-                    <div class="attachment-meta">
-                        <strong id="attachment-name"></strong>
-                        <small id="attachment-details"></small>
-                    </div>
-                    <button id="remove-attachment-btn" class="secondary-btn small-btn" type="button" aria-label="Remove attachment">
-                        Remove
-                    </button>
-                </div>
-
-                <form id="chat-form" class="chat-form">
-                    <input
-                        id="attachment-file-input"
-                        class="hidden"
-                        type="file"
-                        accept=".jpg,.jpeg,.png,.webp,.pdf,.txt,image/jpeg,image/png,image/webp,application/pdf,text/plain"
-                    >
-                    <button
-                        id="attach-file-btn"
-                        class="attach-button"
-                        type="button"
-                        aria-label="Upload image or document"
-                        title="Attach image (JPG, PNG, WEBP) or document (PDF, TXT)"
-                    >
-                        <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                            <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"></path>
+        <!-- Main Content Area -->
+        <div class="app-shell">
+            <header class="chat-header">
+                <div class="header-brand">
+                    <button id="sidebar-toggle-btn" class="icon-button" type="button" aria-label="Toggle sidebar history" title="Toggle chat history">
+                        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <line x1="3" y1="12" x2="21" y2="12"></line>
+                            <line x1="3" y1="6" x2="21" y2="6"></line>
+                            <line x1="3" y1="18" x2="21" y2="18"></line>
                         </svg>
                     </button>
-                    <textarea
-                        id="message-input"
-                        class="message-input"
-                        rows="1"
-                        placeholder="Message ORACLE CHAT or attach an image / PDF / TXT..."
-                        aria-label="Message input"
-                    ></textarea>
-                    <select id="ui-mode-select" class="ui-mode-select" aria-label="Output format mode" title="Output format mode">
-                        <option value="auto">Auto UI</option>
-                        <option value="a2ui">Force A2UI</option>
-                        <option value="text">Plain Text</option>
-                    </select>
-                    <button id="send-button" class="send-button" type="submit" disabled aria-label="Send message">
-                        Send
-                    </button>
-                </form>
-                <p class="input-hint">Enter to send, Shift + Enter for new line. Modes: Auto UI / Force A2UI (18 elements) / Plain Text.</p>
-            </footer>
-        </section>
-
-        <!-- Settings View -->
-        <section id="settings-view" class="settings-view hidden" aria-label="Settings page">
-            <div class="settings-container">
-                <div class="settings-top">
-                    <div>
-                        <h2>Settings</h2>
-                        <p class="settings-subtitle">Configure LLM provider credentials, local Ollama discovery, and troubleshooting.</p>
-                    </div>
-                    <button id="back-to-chat-btn" class="secondary-btn" type="button">
-                        &larr; Back to Chat
-                    </button>
+                    <span class="status-dot" aria-hidden="true"></span>
+                    <h1>ORACLE CHAT</h1>
                 </div>
 
-                <form id="settings-form" class="settings-form">
-                    <div class="settings-card">
-                        <h3>LLM Provider</h3>
-                        <p class="field-help">Select whether requests should target OpenRouter or a local Ollama instance.</p>
-                        <div class="provider-options">
-                            <label class="provider-option">
-                                <input type="radio" name="provider" value="openrouter" checked>
-                                <span class="provider-card-body">
-                                    <strong>OpenRouter</strong>
-                                    <small>Cloud API with auto free model pinning</small>
-                                </span>
-                            </label>
-                            <label class="provider-option">
-                                <input type="radio" name="provider" value="ollama">
-                                <span class="provider-card-body">
-                                    <strong>Ollama</strong>
-                                    <small>Local models with dynamic discovery</small>
-                                </span>
-                            </label>
+                <div class="header-actions">
+                    <span id="provider-badge" class="header-badge" title="Active provider and model">
+                        OpenRouter · openrouter/free
+                    </span>
+
+                    <button
+                        id="a2ui-demo-btn"
+                        class="icon-button"
+                        type="button"
+                        aria-label="Test all 18 A2UI elements"
+                        title="Render A2UI 18-Element Showcase"
+                    >
+                        <span class="btn-label">A2UI Demo</span>
+                    </button>
+
+                    <button
+                        id="new-chat-btn"
+                        class="icon-button"
+                        type="button"
+                        aria-label="Start new chat session"
+                        title="New Chat"
+                    >
+                        <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <line x1="12" y1="5" x2="12" y2="19"></line>
+                            <line x1="5" y1="12" x2="19" y2="12"></line>
+                        </svg>
+                        <span class="btn-label">New Chat</span>
+                    </button>
+
+                    <button
+                        id="logs-toggle-btn"
+                        class="icon-button"
+                        type="button"
+                        aria-label="Toggle event and error logs"
+                        title="Event & Error Logs"
+                    >
+                        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                            <polyline points="14 2 14 8 20 8"></polyline>
+                            <line x1="8" y1="13" x2="16" y2="13"></line>
+                            <line x1="8" y1="17" x2="13" y2="17"></line>
+                        </svg>
+                        <span class="btn-label">Logs</span>
+                        <span id="log-error-badge" class="error-count hidden">0</span>
+                    </button>
+
+                    <button
+                        id="settings-btn"
+                        class="icon-button"
+                        type="button"
+                        aria-label="Open settings"
+                        title="Settings"
+                    >
+                        <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <circle cx="12" cy="12" r="3"></circle>
+                            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+                        </svg>
+                    </button>
+                </div>
+            </header>
+
+            <!-- Chat View -->
+            <section id="chat-view" class="view-container">
+                <main id="chat-history" class="chat-history" aria-live="polite">
+                    <div id="empty-state" class="empty-state">
+                        <h2>How can I help you today?</h2>
+                        <p>Send a message, attach files, or pick a previous chat from the sidebar.</p>
+                    </div>
+                </main>
+
+                <footer class="chat-input-area">
+                    <div id="attachment-preview" class="attachment-preview hidden">
+                        <img id="attachment-thumb" class="attachment-thumb hidden" src="" alt="Uploaded preview">
+                        <div id="attachment-doc-badge" class="attachment-doc-badge hidden" aria-hidden="true">DOC</div>
+                        <div class="attachment-meta">
+                            <strong id="attachment-name"></strong>
+                            <small id="attachment-details"></small>
                         </div>
+                        <button id="remove-attachment-btn" class="secondary-btn small-btn" type="button" aria-label="Remove attachment">
+                            Remove
+                        </button>
                     </div>
 
-                    <!-- OpenRouter Settings -->
-                    <div id="openrouter-section" class="settings-card">
-                        <h3>OpenRouter Configuration</h3>
+                    <form id="chat-form" class="chat-form">
+                        <input
+                            id="attachment-file-input"
+                            class="hidden"
+                            type="file"
+                            accept=".jpg,.jpeg,.png,.webp,.pdf,.txt,image/jpeg,image/png,image/webp,application/pdf,text/plain"
+                        >
+                        <button
+                            id="attach-file-btn"
+                            class="attach-button"
+                            type="button"
+                            aria-label="Upload image or document"
+                            title="Attach image (JPG, PNG, WEBP) or document (PDF, TXT)"
+                        >
+                            <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"></path>
+                            </svg>
+                        </button>
+                        <textarea
+                            id="message-input"
+                            class="message-input"
+                            rows="1"
+                            placeholder="Message ORACLE CHAT or attach an image / PDF / TXT..."
+                            aria-label="Message input"
+                        ></textarea>
+                        <select id="ui-mode-select" class="ui-mode-select" aria-label="Output format mode" title="Output format mode">
+                            <option value="auto">Auto UI</option>
+                            <option value="a2ui">Force A2UI</option>
+                            <option value="text">Plain Text</option>
+                        </select>
+                        <button id="send-button" class="send-button" type="submit" disabled aria-label="Send message">
+                            Send
+                        </button>
+                    </form>
+                    <p class="input-hint">Enter to send, Shift + Enter for new line. SQLite-backed persistent memory.</p>
+                </footer>
+            </section>
 
-                        <div class="form-group">
-                            <label for="openrouter-api-key">OpenRouter API Key</label>
-                            <div class="input-with-action">
-                                <input
-                                    id="openrouter-api-key"
-                                    type="password"
-                                    placeholder="sk-or-v1-..."
-                                    autocomplete="off"
-                                >
-                                <button id="toggle-key-btn" class="secondary-btn" type="button">Show</button>
+            <!-- Settings View -->
+            <section id="settings-view" class="settings-view hidden" aria-label="Settings page">
+                <div class="settings-container">
+                    <div class="settings-top">
+                        <div>
+                            <h2>Settings</h2>
+                            <p class="settings-subtitle">Configure LLM provider credentials, local Ollama discovery, and troubleshooting.</p>
+                        </div>
+                        <button id="back-to-chat-btn" class="secondary-btn" type="button">
+                            &larr; Back to Chat
+                        </button>
+                    </div>
+
+                    <form id="settings-form" class="settings-form">
+                        <div class="settings-card">
+                            <h3>LLM Provider</h3>
+                            <p class="field-help">Select whether requests should target OpenRouter or a local Ollama instance.</p>
+                            <div class="provider-options">
+                                <label class="provider-option">
+                                    <input type="radio" name="provider" value="openrouter" checked>
+                                    <span class="provider-card-body">
+                                        <strong>OpenRouter</strong>
+                                        <small>Cloud API with auto free model pinning</small>
+                                    </span>
+                                </label>
+                                <label class="provider-option">
+                                    <input type="radio" name="provider" value="ollama">
+                                    <span class="provider-card-body">
+                                        <strong>Ollama</strong>
+                                        <small>Local models with dynamic discovery</small>
+                                    </span>
+                                </label>
                             </div>
-                            <p class="field-help">Optional if <code>OPENROUTER_API_KEY</code> is set in backend <code>.env</code>. Saved in browser localStorage.</p>
                         </div>
 
-                        <div class="form-group">
-                            <label for="openrouter-model">OpenRouter Model / Router</label>
-                            <input
-                                id="openrouter-model"
-                                type="text"
-                                placeholder="openrouter/free"
-                            >
-                            <p class="field-help">Keep <code>openrouter/free</code> to let OpenRouter assign free text &amp; vision models automatically, then stick to them.</p>
-                        </div>
+                        <!-- OpenRouter Settings -->
+                        <div id="openrouter-section" class="settings-card">
+                            <h3>OpenRouter Configuration</h3>
 
-                        <div class="form-group">
-                            <label for="pinned-free-model">Assigned Sticky Free Text Model</label>
-                            <input
-                                id="pinned-free-model"
-                                type="text"
-                                readonly
-                                placeholder="Not assigned yet (will auto-pin on first text reply)"
-                            >
-                        </div>
+                            <div class="form-group">
+                                <label for="openrouter-api-key">OpenRouter API Key</label>
+                                <div class="input-with-action">
+                                    <input
+                                        id="openrouter-api-key"
+                                        type="password"
+                                        placeholder="sk-or-v1-..."
+                                        autocomplete="off"
+                                    >
+                                    <button id="toggle-key-btn" class="secondary-btn" type="button">Show</button>
+                                </div>
+                                <p class="field-help">Optional if <code>OPENROUTER_API_KEY</code> is set in backend <code>.env</code>. Saved in browser localStorage.</p>
+                            </div>
 
-                        <div class="form-group">
-                            <label for="pinned-vision-model">Assigned Sticky Free Vision Model</label>
-                            <div class="input-with-action">
+                            <div class="form-group">
+                                <label for="openrouter-model">OpenRouter Model / Router</label>
                                 <input
-                                    id="pinned-vision-model"
+                                    id="openrouter-model"
+                                    type="text"
+                                    placeholder="openrouter/free"
+                                >
+                                <p class="field-help">Keep <code>openrouter/free</code> to let OpenRouter assign free text &amp; vision models automatically, then stick to them.</p>
+                            </div>
+
+                            <div class="form-group">
+                                <label for="pinned-free-model">Assigned Sticky Free Text Model</label>
+                                <input
+                                    id="pinned-free-model"
                                     type="text"
                                     readonly
-                                    placeholder="Not assigned yet (will auto-pin on first image analysis)"
+                                    placeholder="Not assigned yet (will auto-pin on first text reply)"
                                 >
-                                <button id="clear-pinned-btn" class="secondary-btn" type="button">Clear Pins</button>
                             </div>
-                            <p class="field-help">Once OpenRouter assigns free models, subsequent requests stick to them until cleared or unavailable.</p>
+
+                            <div class="form-group">
+                                <label for="pinned-vision-model">Assigned Sticky Free Vision Model</label>
+                                <div class="input-with-action">
+                                    <input
+                                        id="pinned-vision-model"
+                                        type="text"
+                                        readonly
+                                        placeholder="Not assigned yet (will auto-pin on first image analysis)"
+                                    >
+                                    <button id="clear-pinned-btn" class="secondary-btn" type="button">Clear Pins</button>
+                                </div>
+                                <p class="field-help">Once OpenRouter assigns free models, subsequent requests stick to them until cleared or unavailable.</p>
+                            </div>
                         </div>
-                    </div>
 
-                    <!-- Ollama Settings -->
-                    <div id="ollama-section" class="settings-card hidden">
-                        <h3>Ollama Local Model Discovery</h3>
+                        <!-- Ollama Settings -->
+                        <div id="ollama-section" class="settings-card hidden">
+                            <h3>Ollama Local Model Discovery</h3>
 
-                        <div class="form-group">
-                            <label for="ollama-base-url">Ollama Base URL (Optional)</label>
-                            <div class="input-with-action">
+                            <div class="form-group">
+                                <label for="ollama-base-url">Ollama Base URL (Optional)</label>
+                                <div class="input-with-action">
+                                    <input
+                                        id="ollama-base-url"
+                                        type="url"
+                                        placeholder="Leave blank to use backend default (http://localhost:11434)"
+                                    >
+                                    <button id="discover-ollama-btn" class="primary-btn" type="button">
+                                        Discover Models
+                                    </button>
+                                </div>
+                                <p class="field-help">Leave blank when Ollama runs on the same VM so the backend connects locally without proxy redirects.</p>
+                            </div>
+
+                            <div id="ollama-discovery-status" class="status-banner hidden" role="status"></div>
+
+                            <div class="form-group">
+                                <label for="ollama-model-select">Discovered Local Models</label>
+                                <select id="ollama-model-select">
+                                    <option value="">-- Click "Discover Models" to scan Ollama --</option>
+                                </select>
+                            </div>
+
+                            <div class="form-group">
+                                <label for="ollama-custom-model">Or Enter Ollama Model Name Manually</label>
                                 <input
-                                    id="ollama-base-url"
-                                    type="url"
-                                    placeholder="Leave blank to use backend OLLAMA_BASE_URL (local port 11434)"
+                                    id="ollama-custom-model"
+                                    type="text"
+                                    placeholder="e.g. gemma3:4b or qwen2.5-vl"
                                 >
-                                <button id="discover-ollama-btn" class="primary-btn" type="button">
-                                    Discover Models
-                                </button>
                             </div>
-                            <p class="field-help">Leave blank when Ollama runs on the same VM or Cloud Shell so the backend connects locally without proxy redirects.</p>
                         </div>
 
-                        <div id="ollama-discovery-status" class="status-banner hidden" role="status"></div>
-
-                        <div class="form-group">
-                            <label for="ollama-model-select">Discovered Local Models</label>
-                            <select id="ollama-model-select">
-                                <option value="">-- Click "Discover Models" to scan Ollama --</option>
-                            </select>
+                        <div class="settings-actions">
+                            <div class="settings-actions-left">
+                                <button id="save-settings-btn" class="primary-btn" type="submit">Save Settings</button>
+                                <button id="reset-settings-btn" class="secondary-btn" type="button">Reset Defaults</button>
+                            </div>
+                            <button id="open-logs-from-settings-btn" class="secondary-btn" type="button">Open Log Window</button>
                         </div>
 
-                        <div class="form-group">
-                            <label for="ollama-custom-model">Or Enter Ollama Model Name Manually</label>
-                            <input
-                                id="ollama-custom-model"
-                                type="text"
-                                placeholder="e.g. gemma3:4b or qwen2.5-vl"
-                            >
+                        <div id="settings-save-feedback" class="status-banner hidden" role="status"></div>
+                    </form>
+                </div>
+            </section>
+
+            <!-- Troubleshooting Log Window -->
+            <aside id="log-drawer" class="log-drawer hidden" aria-label="Event and Error Log Window">
+                <div class="log-header">
+                    <div class="log-title-group">
+                        <strong>Event &amp; Error Log</strong>
+                        <div class="log-filters" role="group" aria-label="Filter logs">
+                            <button type="button" class="filter-btn active" data-filter="all">All</button>
+                            <button type="button" class="filter-btn" data-filter="event">Events</button>
+                            <button type="button" class="filter-btn" data-filter="error">Errors</button>
                         </div>
                     </div>
-
-                    <div class="settings-actions">
-                        <div class="settings-actions-left">
-                            <button id="save-settings-btn" class="primary-btn" type="submit">Save Settings</button>
-                            <button id="reset-settings-btn" class="secondary-btn" type="button">Reset Defaults</button>
-                        </div>
-                        <button id="open-logs-from-settings-btn" class="secondary-btn" type="button">Open Log Window</button>
-                    </div>
-
-                    <div id="settings-save-feedback" class="status-banner hidden" role="status"></div>
-                </form>
-            </div>
-        </section>
-
-        <!-- Troubleshooting Log Window -->
-        <aside id="log-drawer" class="log-drawer hidden" aria-label="Event and Error Log Window">
-            <div class="log-header">
-                <div class="log-title-group">
-                    <strong>Event &amp; Error Log</strong>
-                    <div class="log-filters" role="group" aria-label="Filter logs">
-                        <button type="button" class="filter-btn active" data-filter="all">All</button>
-                        <button type="button" class="filter-btn" data-filter="event">Events</button>
-                        <button type="button" class="filter-btn" data-filter="error">Errors</button>
+                    <div class="log-actions">
+                        <button id="copy-logs-btn" class="secondary-btn small-btn" type="button">Copy Logs</button>
+                        <button id="clear-logs-btn" class="secondary-btn small-btn" type="button">Clear</button>
+                        <button id="close-logs-btn" class="secondary-btn small-btn" type="button">Close</button>
                     </div>
                 </div>
-                <div class="log-actions">
-                    <button id="copy-logs-btn" class="secondary-btn small-btn" type="button">Copy Logs</button>
-                    <button id="clear-logs-btn" class="secondary-btn small-btn" type="button">Clear</button>
-                    <button id="close-logs-btn" class="secondary-btn small-btn" type="button">Close</button>
-                </div>
-            </div>
-            <div id="log-output" class="log-output" aria-live="polite"></div>
-        </aside>
+                <div id="log-output" class="log-output" aria-live="polite"></div>
+            </aside>
+        </div>
     </div>
 
     <script src="/static/js/a2ui_renderer.js"></script>

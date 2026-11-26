@@ -63,9 +63,17 @@ class A2uiService:
         }
         self._base_processor = self.generator.create_processor(self.capabilities)
 
-    def build_system_prompt(self, ui_mode: str) -> str | None:
+    def build_system_prompt(self, ui_mode: str, provider: str = "openrouter") -> str | None:
         if ui_mode == "text":
             return None
+
+        # PERFORMANCE: When running local models on CPU, do not inject the 5,000-token
+        # A2UI grammar in auto mode. Keep it lean so the prompt processes in 1-2 seconds.
+        if provider == "ollama" and ui_mode != "a2ui":
+            return (
+                "You are ORACLE CHAT, a helpful assistant running locally on Oracle Cloud. "
+                "Answer questions directly, accurately, and concisely."
+            )
 
         if ui_mode == "a2ui":
             mode_rule = (

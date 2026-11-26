@@ -9,9 +9,14 @@ __pycache__/
 # Environment variables
 .env
 
-# Uploaded files
+# Uploaded files & SQLite Database
 uploads/*
 !uploads/.gitkeep
+data/*
+!data/.gitkeep
+*.db
+*.sqlite
+*.sqlite3
 
 # OS / Editor
 .DS_Store

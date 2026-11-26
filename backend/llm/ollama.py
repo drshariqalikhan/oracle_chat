@@ -26,7 +26,7 @@ class OllamaProvider(LLMProvider):
         self,
         base_url: str = "http://localhost:11434",
         default_model: str = "",
-        timeout: float = 120.0,
+        timeout: float = 300.0,
     ) -> None:
         self.base_url = normalize_ollama_base_url(base_url or "http://localhost:11434")
         self.default_model = default_model.strip()
@@ -104,6 +104,9 @@ class OllamaProvider(LLMProvider):
             "model": selected_model,
             "messages": messages,
             "stream": False,
+            "options": {
+                "num_ctx": 4096,
+            },
         }
 
         try:
