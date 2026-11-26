@@ -1,8 +1,24 @@
+import re
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 
 from backend.llm.base import LLMProvider, LLMProviderError, LLMResponse
+
+CLOUDSHELL_PREVIEW_RE = re.compile(
+    r"^https?://(\d+)-cs-[^/]+\.cloudshell\.dev(?:/.*)?$",
+    re.IGNORECASE,
+)
+
+
+def normalize_ollama_base_url(base_url: str) -> str:
+    cleaned = (base_url or "").strip().rstrip("/")
+    match = CLOUDSHELL_PREVIEW_RE.match(cleaned)
+    if match:
+        port = match.group(1)
+        return f"http://127.0.0.1:{port}"
+    return cleaned
 
 
 class OllamaProvider(LLMProvider):
@@ -12,9 +28,62 @@ class OllamaProvider(LLMProvider):
         default_model: str = "",
         timeout: float = 120.0,
     ) -> None:
-        self.base_url = base_url.strip().rstrip("/")
+        self.base_url = normalize_ollama_base_url(base_url or "http://localhost:11434")
         self.default_model = default_model.strip()
         self.timeout = timeout
+
+    def _validate_base_url(self) -> None:
+        parsed = urlparse(self.base_url)
+        if parsed.scheme not in ("http", "https") or not parsed.netloc:
+            raise LLMProviderError(
+                f"Invalid Ollama URL: '{self.base_url}'. Must start with http:// or https://",
+                status_code=400,
+            )
+
+    async def list_models(self) -> list[dict[str, Any]]:
+        self._validate_base_url()
+        tags_url = f"{self.base_url}/api/tags"
+
+        try:
+            async with httpx.AsyncClient(timeout=8.0) as client:
+                response = await client.get(tags_url, headers={"Accept": "application/json"})
+        except httpx.TimeoutException as exc:
+            raise LLMProviderError(
+                f"Timed out connecting to Ollama at {self.base_url}",
+                status_code=504,
+            ) from exc
+        except httpx.RequestError as exc:
+            raise LLMProviderError(
+                f"Cannot reach Ollama at {self.base_url} ({exc})",
+                status_code=502,
+            ) from exc
+
+        if response.status_code >= 400:
+            detail = self._extract_error_detail(response)
+            raise LLMProviderError(
+                f"Ollama returned HTTP {response.status_code} at {tags_url}: {detail}",
+                status_code=502,
+            )
+
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            raise LLMProviderError(
+                f"Invalid JSON received from Ollama at {tags_url}.",
+                status_code=502,
+            ) from exc
+
+        raw_models = payload.get("models", [])
+        return [
+            {
+                "name": item.get("name", ""),
+                "size": item.get("size", 0),
+                "modified_at": item.get("modified_at", ""),
+                "details": item.get("details", {}),
+            }
+            for item in raw_models
+            if item.get("name")
+        ]
 
     async def chat(
         self,
@@ -22,6 +91,7 @@ class OllamaProvider(LLMProvider):
         model: str | None = None,
         **kwargs: Any,
     ) -> LLMResponse:
+        self._validate_base_url()
         selected_model = (model or "").strip() or self.default_model
         if not selected_model or selected_model == "openrouter/free":
             raise LLMProviderError(
@@ -52,7 +122,12 @@ class OllamaProvider(LLMProvider):
 
         if response.status_code >= 400:
             detail = self._extract_error_detail(response)
-            mapped_status = response.status_code if response.status_code in (400, 404) else 502
+            if response.status_code == 404:
+                raise LLMProviderError(
+                    f"Ollama model '{selected_model}' not found ({detail}). Run: ollama pull {selected_model}",
+                    status_code=404,
+                )
+            mapped_status = 400 if response.status_code == 400 else 502
             raise LLMProviderError(
                 f"Ollama error ({response.status_code}): {detail}",
                 status_code=mapped_status,
@@ -69,9 +144,9 @@ class OllamaProvider(LLMProvider):
         message_obj = data.get("message") or {}
         content = message_obj.get("content")
         if not isinstance(content, str) or not content.strip():
-            raise LLMResponse(
-                content="Ollama returned an empty response.",
-                model=str(data.get("model") or selected_model).strip(),
+            raise LLMProviderError(
+                f"Ollama returned an empty response for model '{selected_model}'.",
+                status_code=502,
             )
 
         resolved_model = str(data.get("model") or selected_model).strip()

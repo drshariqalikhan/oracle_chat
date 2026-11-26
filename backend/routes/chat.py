@@ -1,11 +1,12 @@
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 
 from backend.config import get_settings
 from backend.llm.base import LLMProvider, LLMProviderError, LLMResponse
 from backend.llm.factory import SUPPORTED_PROVIDERS, create_llm_provider
+from backend.llm.ollama import OllamaProvider
 from backend.models import ChatHistoryResponse, ChatRequest, ChatResponse, StandardizedLLMOutput
 from backend.services.a2ui_service import ALL_BASIC_COMPONENTS, A2uiService
 from backend.services.file_service import FileService, FileValidationError
@@ -36,6 +37,47 @@ async def get_provider_config() -> dict[str, Any]:
         "ollama_base_url": settings.ollama_base_url,
         "openrouter_configured": bool(settings.openrouter_api_key),
         "supported_providers": list(SUPPORTED_PROVIDERS),
+    }
+
+
+@router.get("/api/ollama/models")
+async def discover_ollama_models(
+    base_url: str | None = Query(default=None),
+) -> dict[str, Any]:
+    settings = get_settings()
+    target_url = (base_url or settings.ollama_base_url).strip().rstrip("/")
+    provider = OllamaProvider(base_url=target_url)
+
+    try:
+        models = await provider.list_models()
+    except LLMProviderError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+
+    return {
+        "status": "ok",
+        "base_url": target_url,
+        "count": len(models),
+        "models": models,
+    }
+
+
+@router.get("/api/ollama/health")
+async def check_ollama_health(
+    base_url: str | None = Query(default=None),
+) -> dict[str, Any]:
+    settings = get_settings()
+    target_url = (base_url or settings.ollama_base_url).strip().rstrip("/")
+    provider = OllamaProvider(base_url=target_url)
+
+    try:
+        models = await provider.list_models()
+    except LLMProviderError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+
+    return {
+        "status": "online",
+        "base_url": target_url,
+        "installed_models": len(models),
     }
 
 

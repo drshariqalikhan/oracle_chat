@@ -7,7 +7,7 @@ const DEFAULT_SETTINGS = {
     openrouterModel: "openrouter/free",
     pinnedOpenRouterModel: "",
     pinnedVisionModel: "",
-    ollamaBaseUrl: "http://localhost:11434",
+    ollamaBaseUrl: "",
     ollamaModel: "",
 };
 
@@ -281,6 +281,9 @@ function loadSettings() {
         if (parsed.openrouterModel === "google/gemma-4-31b-it:free") {
             parsed.openrouterModel = DEFAULT_SETTINGS.openrouterModel;
         }
+        if (typeof parsed.ollamaBaseUrl === "string" && parsed.ollamaBaseUrl.includes(".cloudshell.dev")) {
+            parsed.ollamaBaseUrl = "";
+        }
         return { ...DEFAULT_SETTINGS, ...parsed };
     } catch (err) {
         return { ...DEFAULT_SETTINGS };
@@ -329,7 +332,7 @@ function populateSettingsForm(settings) {
     openrouterModelInput.value = settings.openrouterModel;
     pinnedFreeModelInput.value = settings.pinnedOpenRouterModel || "";
     pinnedVisionModelInput.value = settings.pinnedVisionModel || "";
-    ollamaBaseUrlInput.value = settings.ollamaBaseUrl;
+    ollamaBaseUrlInput.value = settings.ollamaBaseUrl || "";
     ollamaCustomModelInput.value = settings.ollamaModel;
 
     if (settings.ollamaModel) {
@@ -378,14 +381,27 @@ function formatBytes(bytes) {
 }
 
 async function discoverOllamaModels() {
-    const baseUrl = ollamaBaseUrlInput.value.trim() || DEFAULT_SETTINGS.ollamaBaseUrl;
+    let baseUrl = ollamaBaseUrlInput.value.trim();
+    if (baseUrl.includes(".cloudshell.dev")) {
+        baseUrl = "";
+        ollamaBaseUrlInput.value = "";
+        addLog("INFO", "OLLAMA", "Cleared Cloud Shell preview URL; using backend local OLLAMA_BASE_URL.");
+    }
+
     discoverOllamaBtn.disabled = true;
     discoverOllamaBtn.textContent = "Scanning...";
-    showStatusBanner(ollamaDiscoveryStatus, `Contacting Ollama at ${baseUrl}...`, "info");
-    addLog("INFO", "OLLAMA", `Starting dynamic model discovery at ${baseUrl}`);
+    showStatusBanner(
+        ollamaDiscoveryStatus,
+        `Contacting Ollama (${baseUrl || "backend local default"})...`,
+        "info"
+    );
+    addLog("INFO", "OLLAMA", `Starting dynamic model discovery (${baseUrl || "backend default"})`);
 
     try {
-        const response = await fetch(`/api/ollama/models?base_url=${encodeURIComponent(baseUrl)}`);
+        const endpoint = baseUrl
+            ? `/api/ollama/models?base_url=${encodeURIComponent(baseUrl)}`
+            : "/api/ollama/models";
+        const response = await fetch(endpoint);
         const data = await response.json();
 
         if (!response.ok) {
@@ -401,7 +417,7 @@ async function discoverOllamaModels() {
             ollamaModelSelect.appendChild(emptyOpt);
             showStatusBanner(
                 ollamaDiscoveryStatus,
-                `Connected to Ollama at ${data.base_url}, but 0 models were returned. Run "ollama pull gemma3:4b" first.`,
+                `Connected to Ollama at ${data.base_url}, but 0 models were returned. Pull a model first.`,
                 "info"
             );
             addLog("WARN", "OLLAMA", "Connected to Ollama, 0 models installed.", data.base_url);
@@ -801,8 +817,8 @@ async function sendChatRequest({
         if (currentSettings.openrouterApiKey) {
             requestBody.api_key = currentSettings.openrouterApiKey;
         }
-    } else if (activeProvider === "ollama") {
-        requestBody.ollama_base_url = currentSettings.ollamaBaseUrl || DEFAULT_SETTINGS.ollamaBaseUrl;
+    } else if (activeProvider === "ollama" && currentSettings.ollamaBaseUrl) {
+        requestBody.ollama_base_url = currentSettings.ollamaBaseUrl;
     }
 
     const logSource = isVision ? "VISION" : isDocument ? "DOCUMENT" : "CHAT";
@@ -1004,6 +1020,7 @@ settingsForm.addEventListener("submit", (event) => {
 
     const selectedProvider = document.querySelector('input[name="provider"]:checked').value;
     const enteredOpenRouterModel = openrouterModelInput.value.trim() || DEFAULT_SETTINGS.openrouterModel;
+    const enteredOllamaUrl = ollamaBaseUrlInput.value.trim();
 
     const updated = {
         provider: selectedProvider,
@@ -1017,7 +1034,7 @@ settingsForm.addEventListener("submit", (event) => {
             enteredOpenRouterModel === "openrouter/free"
                 ? currentSettings.pinnedVisionModel
                 : "",
-        ollamaBaseUrl: ollamaBaseUrlInput.value.trim() || DEFAULT_SETTINGS.ollamaBaseUrl,
+        ollamaBaseUrl: enteredOllamaUrl.includes(".cloudshell.dev") ? "" : enteredOllamaUrl,
         ollamaModel: ollamaCustomModelInput.value.trim() || ollamaModelSelect.value,
     };
 
@@ -1041,7 +1058,7 @@ settingsForm.addEventListener("submit", (event) => {
         provider: currentSettings.provider,
         model: getActiveModelName(currentSettings),
         hasOpenRouterKey: Boolean(currentSettings.openrouterApiKey),
-        ollamaBaseUrl: currentSettings.ollamaBaseUrl,
+        ollamaBaseUrl: currentSettings.ollamaBaseUrl || "backend default",
     });
 });
 

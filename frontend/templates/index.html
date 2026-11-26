@@ -228,18 +228,18 @@
                         <h3>Ollama Local Model Discovery</h3>
 
                         <div class="form-group">
-                            <label for="ollama-base-url">Ollama Base URL</label>
+                            <label for="ollama-base-url">Ollama Base URL (Optional)</label>
                             <div class="input-with-action">
                                 <input
                                     id="ollama-base-url"
                                     type="url"
-                                    placeholder="http://localhost:11434"
+                                    placeholder="Leave blank to use backend OLLAMA_BASE_URL (local port 11434)"
                                 >
                                 <button id="discover-ollama-btn" class="primary-btn" type="button">
                                     Discover Models
                                 </button>
                             </div>
-                            <p class="field-help">Queries <code>/api/tags</code> via the backend server to discover installed Ollama models.</p>
+                            <p class="field-help">Leave blank when Ollama runs on the same VM or Cloud Shell so the backend connects locally without proxy redirects.</p>
                         </div>
 
                         <div id="ollama-discovery-status" class="status-banner hidden" role="status"></div>
