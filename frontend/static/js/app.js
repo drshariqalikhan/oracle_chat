@@ -728,14 +728,6 @@ async function handleA2uiAction(actionPayload) {
         return;
     }
 
-    if (currentSettings.provider === "ollama") {
-        appendMessage(
-            "assistant",
-            `Action captured locally: ${actionPayload.name} | Context: ${JSON.stringify(actionPayload.context)}. (Switch to OpenRouter in Settings to send actions to the LLM.)`
-        );
-        return;
-    }
-
     const actionMessage = `UI Action "${actionPayload.name}" submitted with values: ${JSON.stringify(actionPayload.context)}`;
     await sendChatRequest({
         promptText: actionMessage,
@@ -753,18 +745,26 @@ async function sendChatRequest({
     const isVision = Boolean(attached && attached.kind === "image");
     const isDocument = Boolean(attached && attached.kind === "document");
     const uiMode = uiModeSelect.value || "auto";
+    const activeProvider = currentSettings.provider || "openrouter";
 
     appendMessage("user", userDisplayText || promptText, "", attached);
 
     isSending = true;
     updateSendButtonState();
 
-    const routerModel = currentSettings.openrouterModel || DEFAULT_SETTINGS.openrouterModel;
-    const activePin = isVision
-        ? currentSettings.pinnedVisionModel
-        : currentSettings.pinnedOpenRouterModel;
-    const effectiveDisplay =
-        routerModel === "openrouter/free" && activePin ? activePin : routerModel;
+    const routerModel =
+        activeProvider === "ollama"
+            ? currentSettings.ollamaModel
+            : currentSettings.openrouterModel || DEFAULT_SETTINGS.openrouterModel;
+
+    const activePin =
+        activeProvider === "openrouter" && routerModel === "openrouter/free"
+            ? isVision
+                ? currentSettings.pinnedVisionModel
+                : currentSettings.pinnedOpenRouterModel
+            : "";
+
+    const effectiveDisplay = activePin || routerModel || activeProvider;
 
     const statusText = isVision
         ? `Analyzing image (${effectiveDisplay})...`
@@ -776,6 +776,7 @@ async function sendChatRequest({
     const requestBody = {
         message: promptText,
         session_id: currentSessionId,
+        provider: activeProvider,
         model: routerModel,
         ui_mode: uiMode,
     };
@@ -789,22 +790,26 @@ async function sendChatRequest({
     if (a2uiAction) {
         requestBody.a2ui_action = a2uiAction;
     }
-    if (routerModel === "openrouter/free") {
-        if (isVision && currentSettings.pinnedVisionModel) {
-            requestBody.pinned_vision_model = currentSettings.pinnedVisionModel;
-        } else if (!isVision && currentSettings.pinnedOpenRouterModel) {
-            requestBody.pinned_model = currentSettings.pinnedOpenRouterModel;
+    if (activeProvider === "openrouter") {
+        if (routerModel === "openrouter/free") {
+            if (isVision && currentSettings.pinnedVisionModel) {
+                requestBody.pinned_vision_model = currentSettings.pinnedVisionModel;
+            } else if (!isVision && currentSettings.pinnedOpenRouterModel) {
+                requestBody.pinned_model = currentSettings.pinnedOpenRouterModel;
+            }
         }
-    }
-    if (currentSettings.openrouterApiKey) {
-        requestBody.api_key = currentSettings.openrouterApiKey;
+        if (currentSettings.openrouterApiKey) {
+            requestBody.api_key = currentSettings.openrouterApiKey;
+        }
+    } else if (activeProvider === "ollama") {
+        requestBody.ollama_base_url = currentSettings.ollamaBaseUrl || DEFAULT_SETTINGS.ollamaBaseUrl;
     }
 
     const logSource = isVision ? "VISION" : isDocument ? "DOCUMENT" : "CHAT";
     addLog("INFO", logSource, "POST /chat request sent.", {
         sessionId: currentSessionId,
-        provider: "openrouter",
-        model: routerModel,
+        provider: activeProvider,
+        model: routerModel || null,
         uiMode,
         vision: isVision,
         document: isDocument,
@@ -837,7 +842,12 @@ async function sendChatRequest({
             localStorage.setItem(SESSION_STORAGE_KEY, currentSessionId);
         }
 
-        if (routerModel === "openrouter/free" && data.model && data.model !== "openrouter/free") {
+        if (
+            activeProvider === "openrouter" &&
+            routerModel === "openrouter/free" &&
+            data.model &&
+            data.model !== "openrouter/free"
+        ) {
             if (data.vision_used) {
                 if (currentSettings.pinnedVisionModel !== data.model) {
                     currentSettings.pinnedVisionModel = data.model;
@@ -868,6 +878,7 @@ async function sendChatRequest({
         addLog("INFO", logSource, "Received standardized reply.", {
             sessionId: data.session_id,
             historyLength: data.history_length,
+            provider: data.provider || activeProvider,
             model: data.model || effectiveDisplay,
             usedA2ui: Boolean(standardized.used_a2ui),
             repairRetried: Boolean(standardized.repair_retried),
@@ -878,7 +889,7 @@ async function sendChatRequest({
         pendingBubble.classList.remove("pending");
         pendingBubble.classList.add("error");
         pendingBubble.textContent = `Error: ${err.message}`;
-        addLog("ERROR", logSource, "OpenRouter request failed.", err.message);
+        addLog("ERROR", logSource, `${activeProvider} request failed.`, err.message);
     } finally {
         isSending = false;
         updateSendButtonState();
@@ -903,21 +914,6 @@ async function handleSend(event) {
         promptText = isVision
             ? "Describe this image in detail."
             : "Summarize this document and list its key points.";
-    }
-
-    if (currentSettings.provider === "ollama") {
-        appendMessage("user", promptText, "", attached);
-        messageInput.value = "";
-        autoResizeInput();
-        clearPendingAttachment();
-        updateSendButtonState();
-        appendMessage(
-            "assistant",
-            "Ollama inference is scheduled for Milestone 9. Please switch provider to OpenRouter in Settings to chat or analyze files now.",
-            "error"
-        );
-        addLog("WARN", "CHAT", "Blocked send while Ollama selected (Ollama chat lands in Milestone 9).");
-        return;
     }
 
     messageInput.value = "";

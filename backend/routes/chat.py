@@ -4,8 +4,8 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 
 from backend.config import get_settings
-from backend.llm.base import LLMProviderError, LLMResponse
-from backend.llm.openrouter import OpenRouterProvider
+from backend.llm.base import LLMProvider, LLMProviderError, LLMResponse
+from backend.llm.factory import SUPPORTED_PROVIDERS, create_llm_provider
 from backend.models import ChatHistoryResponse, ChatRequest, ChatResponse, StandardizedLLMOutput
 from backend.services.a2ui_service import ALL_BASIC_COMPONENTS, A2uiService
 from backend.services.file_service import FileService, FileValidationError
@@ -25,6 +25,18 @@ memory_service = MemoryService(max_messages=40)
 image_service = ImageService(uploads_dir=UPLOADS_DIR)
 file_service = FileService(uploads_dir=UPLOADS_DIR)
 a2ui_service = A2uiService()
+
+
+@router.get("/api/providers")
+async def get_provider_config() -> dict[str, Any]:
+    settings = get_settings()
+    return {
+        "active_provider": settings.llm_provider,
+        "default_model": settings.model_name,
+        "ollama_base_url": settings.ollama_base_url,
+        "openrouter_configured": bool(settings.openrouter_api_key),
+        "supported_providers": list(SUPPORTED_PROVIDERS),
+    }
 
 
 @router.get("/chat/pinned-model")
@@ -79,7 +91,7 @@ async def clear_chat_history(session_id: str) -> dict[str, str]:
 
 
 async def _parse_with_optional_repair(
-    provider: OpenRouterProvider,
+    provider: LLMProvider,
     initial_result: LLMResponse,
     base_history: list[dict[str, Any]],
     user_prompt: str,
@@ -132,15 +144,24 @@ async def chat(payload: ChatRequest) -> ChatResponse:
     global _pinned_free_model, _pinned_vision_model
 
     settings = get_settings()
-    api_key = (payload.api_key or "").strip() or settings.openrouter_api_key
-    requested_model = (payload.model or "").strip() or settings.model_name or FREE_ROUTER_MODEL
     session_id = (payload.session_id or "").strip() or memory_service.create_session_id()
 
-    provider = OpenRouterProvider(
-        api_key=api_key,
-        default_model=FREE_ROUTER_MODEL,
-        base_url=settings.openrouter_base_url,
-    )
+    try:
+        active_provider, provider = create_llm_provider(
+            settings=settings,
+            provider_name=payload.provider,
+            api_key=payload.api_key,
+            default_model=payload.model,
+            ollama_base_url=payload.ollama_base_url,
+        )
+    except LLMProviderError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+
+    if active_provider == "openrouter":
+        requested_model = (payload.model or "").strip() or settings.model_name or FREE_ROUTER_MODEL
+    else:
+        env_ollama_model = "" if settings.model_name == FREE_ROUTER_MODEL else settings.model_name
+        requested_model = (payload.model or "").strip() or env_ollama_model
 
     is_vision = bool(payload.image_id)
     image_data_url: str | None = None
@@ -175,7 +196,7 @@ async def chat(payload: ChatRequest) -> ChatResponse:
         base_history.append({"role": "system", "content": a2ui_system_prompt})
     base_history.extend(prior_messages)
 
-    async def run_inference(target_model: str):
+    async def run_inference(target_model: str | None) -> LLMResponse:
         if is_vision and image_data_url is not None:
             vision_history = list(base_history)
             if documents_context:
@@ -218,7 +239,7 @@ async def chat(payload: ChatRequest) -> ChatResponse:
         else payload.message
     )
 
-    if requested_model == FREE_ROUTER_MODEL:
+    if active_provider == "openrouter" and requested_model == FREE_ROUTER_MODEL:
         if is_vision:
             active_pinned = (payload.pinned_vision_model or "").strip() or _pinned_vision_model
         else:
@@ -269,6 +290,7 @@ async def chat(payload: ChatRequest) -> ChatResponse:
             output=standardized,
             session_id=session_id,
             history_length=len(updated_history),
+            provider=active_provider,
             model=final_result.model,
             pinned=bool(_pinned_vision_model if is_vision else _pinned_free_model),
             vision_used=is_vision,
@@ -276,7 +298,7 @@ async def chat(payload: ChatRequest) -> ChatResponse:
         )
 
     try:
-        result = await run_inference(requested_model)
+        result = await run_inference(requested_model or None)
     except LLMProviderError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
 
@@ -299,6 +321,7 @@ async def chat(payload: ChatRequest) -> ChatResponse:
         output=standardized,
         session_id=session_id,
         history_length=len(updated_history),
+        provider=active_provider,
         model=final_result.model,
         pinned=False,
         vision_used=is_vision,

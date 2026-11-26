@@ -78,7 +78,10 @@ not_valid_syntax((((
             model="test/free:free",
         )
 
-        with patch("backend.routes.chat.OpenRouterProvider.chat", new=AsyncMock(side_effect=[broken, repaired])):
+        with patch(
+            "backend.llm.openrouter.OpenRouterProvider.chat",
+            new=AsyncMock(side_effect=[broken, repaired]),
+        ):
             resp = self.client.post(
                 "/chat",
                 json={

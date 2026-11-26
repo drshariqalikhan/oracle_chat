@@ -28,10 +28,12 @@ class ChatRequest(BaseModel):
     document_name: str | None = None
     ui_mode: Literal["auto", "a2ui", "text"] = "auto"
     a2ui_action: A2uiActionPayload | None = None
+    provider: str | None = None
     model: str | None = None
     pinned_model: str | None = None
     pinned_vision_model: str | None = None
     api_key: str | None = None
+    ollama_base_url: str | None = None
 
     @model_validator(mode="after")
     def validate_message_or_attachment(self) -> "ChatRequest":
@@ -57,6 +59,8 @@ class ChatRequest(BaseModel):
         self.image_id = cleaned_img
         self.document_id = cleaned_doc
         self.document_name = (self.document_name or "").strip() or None
+        self.provider = (self.provider or "").strip().lower() or None
+        self.ollama_base_url = (self.ollama_base_url or "").strip().rstrip("/") or None
         return self
 
 
@@ -65,6 +69,7 @@ class ChatResponse(BaseModel):
     output: StandardizedLLMOutput
     session_id: str
     history_length: int
+    provider: str
     model: str | None = None
     pinned: bool = False
     vision_used: bool = False
