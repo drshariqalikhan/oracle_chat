@@ -17,6 +17,7 @@ class Settings:
     openrouter_api_key: str
     openrouter_base_url: str
     ollama_base_url: str
+    ollama_timeout: float
 
 
 def get_settings() -> Settings:
@@ -30,4 +31,5 @@ def get_settings() -> Settings:
             "OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"
         ).strip().rstrip("/"),
         ollama_base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434").strip().rstrip("/"),
+        ollama_timeout=float(os.getenv("OLLAMA_TIMEOUT", "300")),
     )

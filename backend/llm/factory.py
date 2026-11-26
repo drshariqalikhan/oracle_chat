@@ -31,6 +31,7 @@ def create_llm_provider(
         return selected_provider, OllamaProvider(
             base_url=resolved_url,
             default_model=resolved_model,
+            timeout=settings.ollama_timeout,
         )
 
     raise LLMProviderError(
