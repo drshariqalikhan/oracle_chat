@@ -16,6 +16,7 @@ class StandardizedLLMOutput(BaseModel):
     used_a2ui: bool = False
     ui_mode: Literal["auto", "a2ui", "text"] = "auto"
     raw_format: Literal["express", "wire_json", "text"] = "text"
+    repair_retried: bool = False
     validation_warnings: list[str] = Field(default_factory=list)
 
 

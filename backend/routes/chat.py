@@ -4,7 +4,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 
 from backend.config import get_settings
-from backend.llm.base import LLMProviderError
+from backend.llm.base import LLMProviderError, LLMResponse
 from backend.llm.openrouter import OpenRouterProvider
 from backend.models import ChatHistoryResponse, ChatRequest, ChatResponse, StandardizedLLMOutput
 from backend.services.a2ui_service import ALL_BASIC_COMPONENTS, A2uiService
@@ -76,6 +76,55 @@ async def clear_chat_history(session_id: str) -> dict[str, str]:
         raise HTTPException(status_code=400, detail="Session ID cannot be empty.")
     memory_service.clear_session(cleaned_id)
     return {"status": "ok", "session_id": cleaned_id}
+
+
+async def _parse_with_optional_repair(
+    provider: OpenRouterProvider,
+    initial_result: LLMResponse,
+    base_history: list[dict[str, Any]],
+    user_prompt: str,
+    ui_mode: str,
+) -> tuple[StandardizedLLMOutput, LLMResponse]:
+    standardized = a2ui_service.parse_and_standardize(
+        initial_result.content,
+        ui_mode=ui_mode,
+    )
+
+    if ui_mode == "text" or standardized.used_a2ui or not standardized.validation_warnings:
+        return standardized, initial_result
+
+    repair_messages = [
+        *base_history,
+        {"role": "user", "content": user_prompt},
+        {"role": "assistant", "content": initial_result.content},
+        {"role": "user", "content": a2ui_service.build_repair_prompt(standardized.validation_warnings)},
+    ]
+
+    try:
+        repaired_result = await provider.chat(
+            messages=repair_messages,
+            model=initial_result.model,
+        )
+    except LLMProviderError:
+        return standardized, initial_result
+
+    repaired_standardized = a2ui_service.parse_and_standardize(
+        repaired_result.content,
+        ui_mode=ui_mode,
+    )
+    repaired_standardized = repaired_standardized.model_copy(update={"repair_retried": True})
+
+    if repaired_standardized.used_a2ui:
+        return repaired_standardized, repaired_result
+
+    combined_warnings = [
+        *standardized.validation_warnings,
+        *repaired_standardized.validation_warnings,
+    ]
+    return (
+        repaired_standardized.model_copy(update={"validation_warnings": combined_warnings}),
+        repaired_result,
+    )
 
 
 @router.post("/chat", response_model=ChatResponse)
@@ -201,8 +250,11 @@ async def chat(payload: ChatRequest) -> ChatResponse:
             else:
                 _pinned_free_model = result.model
 
-        standardized: StandardizedLLMOutput = a2ui_service.parse_and_standardize(
-            result.content,
+        standardized, final_result = await _parse_with_optional_repair(
+            provider=provider,
+            initial_result=result,
+            base_history=base_history,
+            user_prompt=payload.message,
             ui_mode=payload.ui_mode,
         )
 
@@ -217,7 +269,7 @@ async def chat(payload: ChatRequest) -> ChatResponse:
             output=standardized,
             session_id=session_id,
             history_length=len(updated_history),
-            model=result.model,
+            model=final_result.model,
             pinned=bool(_pinned_vision_model if is_vision else _pinned_free_model),
             vision_used=is_vision,
             document_used=has_document_context,
@@ -228,8 +280,11 @@ async def chat(payload: ChatRequest) -> ChatResponse:
     except LLMProviderError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
 
-    standardized = a2ui_service.parse_and_standardize(
-        result.content,
+    standardized, final_result = await _parse_with_optional_repair(
+        provider=provider,
+        initial_result=result,
+        base_history=base_history,
+        user_prompt=payload.message,
         ui_mode=payload.ui_mode,
     )
 
@@ -244,7 +299,7 @@ async def chat(payload: ChatRequest) -> ChatResponse:
         output=standardized,
         session_id=session_id,
         history_length=len(updated_history),
-        model=result.model,
+        model=final_result.model,
         pinned=False,
         vision_used=is_vision,
         document_used=has_document_context,

@@ -1,7 +1,9 @@
 import unittest
+from unittest.mock import AsyncMock, patch
 
 from fastapi.testclient import TestClient
 
+from backend.llm.base import LLMResponse
 from backend.main import app
 from backend.services.a2ui_service import ALL_BASIC_COMPONENTS, A2uiService
 
@@ -26,6 +28,14 @@ class TestA2uiStandardization(unittest.TestCase):
 
         for expected in ALL_BASIC_COMPONENTS:
             self.assertIn(expected, present_types, f"Missing Basic Catalog component: {expected}")
+
+    def test_prompts_contain_strict_rules_and_conservative_auto_mode(self) -> None:
+        auto_prompt = self.service.build_system_prompt("auto") or ""
+        a2ui_prompt = self.service.build_system_prompt("a2ui") or ""
+        self.assertIsNone(self.service.build_system_prompt("text"))
+        self.assertIn("CONSERVATIVE", auto_prompt)
+        self.assertIn("root = Card(...)", auto_prompt)
+        self.assertIn("Minimal valid example", a2ui_prompt)
 
     def test_express_response_compiles_to_standardized_output(self) -> None:
         sample_llm_reply = """Here is a quick status card.
@@ -53,6 +63,36 @@ not_valid_syntax((((
         self.assertEqual(output.raw_format, "text")
         self.assertIn("Plain summary text survives.", output.text)
         self.assertTrue(len(output.validation_warnings) > 0)
+
+    def test_chat_auto_repairs_broken_a2ui_on_single_retry(self) -> None:
+        broken = LLMResponse(
+            content="Summary.\n<a2ui>\nbad_surface\n</a2ui>",
+            model="test/free:free",
+        )
+        repaired = LLMResponse(
+            content=(
+                "Fixed card.\n<a2ui>\n"
+                'root = Card(Column([Text("Fixed", variant="body")]))\n'
+                "</a2ui>"
+            ),
+            model="test/free:free",
+        )
+
+        with patch("backend.routes.chat.OpenRouterProvider.chat", new=AsyncMock(side_effect=[broken, repaired])):
+            resp = self.client.post(
+                "/chat",
+                json={
+                    "message": "Make a card",
+                    "ui_mode": "a2ui",
+                    "api_key": "test-key",
+                },
+            )
+
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        self.assertTrue(body["output"]["used_a2ui"])
+        self.assertTrue(body["output"]["repair_retried"])
+        self.assertEqual(body["reply"], "Fixed card.")
 
     def test_showcase_endpoint_returns_200(self) -> None:
         resp = self.client.get("/api/a2ui/showcase")

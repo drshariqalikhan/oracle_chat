@@ -858,6 +858,9 @@ async function sendChatRequest({
         const standardized = data.output || { text: data.reply ?? "", used_a2ui: false, a2ui_messages: [] };
         renderOutputIntoBubble(pendingBubble, standardized);
 
+        if (standardized.repair_retried && standardized.used_a2ui) {
+            addLog("INFO", "A2UI", "Auto-repaired A2UI syntax on 1-retry.");
+        }
         if (Array.isArray(standardized.validation_warnings) && standardized.validation_warnings.length > 0) {
             addLog("WARN", "A2UI", "Fallback to plain text after A2UI validation warning.", standardized.validation_warnings);
         }
@@ -867,6 +870,7 @@ async function sendChatRequest({
             historyLength: data.history_length,
             model: data.model || effectiveDisplay,
             usedA2ui: Boolean(standardized.used_a2ui),
+            repairRetried: Boolean(standardized.repair_retried),
             rawFormat: standardized.raw_format,
             a2uiMessages: (standardized.a2ui_messages || []).length,
         });

@@ -32,6 +32,22 @@ ALL_BASIC_COMPONENTS = (
     "DateTimeInput",
 )
 
+STRICT_EXPRESS_RULES = """STRICT A2UI EXPRESS RULES:
+1. Always start inside <a2ui>...</a2ui> with: root = Card(...) or root = Column(...)
+2. NEVER invent custom surface names (e.g. do NOT write "demo" or createSurface("name")).
+3. NEVER use slash commands (e.g. /updateComponents) or raw JSON inside <a2ui>...</a2ui>.
+4. All string literals must be quoted ("..."), and Text.variant may only be "body" or "caption".
+5. Always provide a concise plain-text reply outside <a2ui>...</a2ui> tags."""
+
+MINIMAL_EXPRESS_EXAMPLE = """Minimal valid example:
+Here is a quick option card.
+<a2ui>
+root = Card(Column([
+  Text("Quick Summary", variant="body"),
+  Button(Text("Confirm"), variant="primary", action=Event("confirm_action"))
+]))
+</a2ui>"""
+
 
 class A2uiService:
     def __init__(self) -> None:
@@ -51,21 +67,37 @@ class A2uiService:
         if ui_mode == "text":
             return None
 
-        mode_rule = (
-            "ALWAYS include an <a2ui>...</a2ui> UI block along with a brief 1-2 sentence plain-text summary outside the tags."
-            if ui_mode == "a2ui"
-            else (
-                "Include an <a2ui>...</a2ui> UI block whenever structured cards, lists, tabs, forms, "
-                "choices, sliders, date pickers, media, or interactive buttons make the answer clearer. "
-                "For short casual replies, plain text alone is fine."
+        if ui_mode == "a2ui":
+            mode_rule = (
+                "ALWAYS include a valid <a2ui>...</a2ui> Express UI block along with a brief 1-2 sentence "
+                "plain-text summary outside the tags.\n\n"
+                f"{MINIMAL_EXPRESS_EXAMPLE}"
             )
-        )
+        else:
+            mode_rule = (
+                "Be CONSERVATIVE with <a2ui>: reply in plain text ONLY for normal conversation, Q&A, "
+                "explanations, and document summaries. ONLY include <a2ui>...</a2ui> when the user "
+                "explicitly asks for a form, interactive card, checklist, choices, slider, or UI widget."
+            )
 
         return (
             "You are ORACLE CHAT, a helpful assistant capable of generating interactive A2UI v1.0 interfaces.\n"
-            f"{mode_rule}\n"
-            "Always provide helpful plain text outside <a2ui>...</a2ui> tags as well.\n\n"
+            f"{mode_rule}\n\n"
+            f"{STRICT_EXPRESS_RULES}\n\n"
             f"{self._base_processor.prompt_snippet}"
+        )
+
+    @staticmethod
+    def build_repair_prompt(warnings: list[str]) -> str:
+        error_summary = "; ".join(warnings)
+        return (
+            "Your previous <a2ui>...</a2ui> block failed A2UI Express validation with:\n"
+            f"{error_summary}\n\n"
+            "Rewrite your response with a valid <a2ui>...</a2ui> block following these exact rules:\n"
+            "- Start with: root = Card(...) or root = Column(...)\n"
+            "- Do NOT invent custom surface names or slash commands.\n"
+            "- Text.variant can only be \"body\" or \"caption\".\n"
+            "- Keep a brief plain-text summary outside <a2ui>...</a2ui>."
         )
 
     def parse_and_standardize(self, raw_reply: str, ui_mode: str = "auto") -> StandardizedLLMOutput:
