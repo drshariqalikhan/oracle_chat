@@ -3,12 +3,11 @@ import os
 import sys
 import logging
 import httpx
+from pathlib import Path
 from dotenv import load_dotenv
 
-BASE_DIR = Path(__file__).resolve().parent.parent if 'Path' in globals() else None
-# Fallback base dir calculation
-import pathlib
-BASE_DIR = pathlib.Path(__file__).resolve().parent.parent
+# Path setup for repo
+BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(BASE_DIR / ".env")
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
@@ -20,89 +19,70 @@ if not TELEGRAM_BOT_TOKEN or not OWNER_TELEGRAM_ID:
     print("ERROR: TELEGRAM_BOT_TOKEN and OWNER_TELEGRAM_ID must be set in .env", file=sys.stderr)
     sys.exit(1)
 
-logging.basicConfig(
-    format="%(asctime)s - %(levelname)s - %(message)s",
-    level=logging.INFO
-)
+logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 TELEGRAM_API = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
 
-async def query_ollama(prompt: str) -> str:
-    payload = {
-        "model": OLLAMA_MODEL,
-        "messages": [{"role": "user", "content": prompt}],
-        "stream": False,
-        "options": {"num_ctx": 4096}
-    }
-    try:
-        async with httpx.AsyncClient(timeout=300.0) as client:
-            response = await client.post(OLLAMA_API_URL, json=payload)
-            if response.status_code != 200:
-                return f"Ollama error (HTTP {response.status_code}): {response.text}"
-            data = response.json()
-            return data.get("message", {}).get("content", "Empty response from model.")
-    except Exception as exc:
-        logger.exception("Failed to connect to Ollama")
-        return f"Failed to reach local Ollama engine: {exc}"
+# State storage
+chat_preferences = {}
 
-async def send_telegram_message(chat_id: str, text: str):
-    url = f"{TELEGRAM_API}/sendMessage"
-    payload = {"chat_id": chat_id, "text": text}
-    async with httpx.AsyncClient(timeout=10.0) as client:
+def get_pref(chat_id: str) -> dict:
+    if chat_id not in chat_preferences:
+        chat_preferences[chat_id] = {"provider": "ollama", "model": ""}
+    return chat_preferences[chat_id]
+
+async def get_ollama_installed_models() -> list[str]:
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(f"{OLLAMA_API_URL.rsplit('/api/', 1)[0]}/api/tags")
+            if resp.status_code == 200:
+                return [m["name"] for m in resp.json().get("models", [])]
+    except Exception: pass
+    return []
+
+async def query_llm(provider: str, model: str, prompt: str) -> str:
+    if provider == "ollama":
+        url = OLLAMA_API_URL
+        target_model = model
+        if not target_model:
+            models = await get_ollama_installed_models()
+            target_model = models[0] if models else "gemma4:e4b-it-qat"
+
+        payload = {
+            "model": target_model,
+            "messages": [{"role": "user", "content": prompt}],
+            "stream": False,
+            "think": False,
+            "options": {"num_ctx": 4096}
+        }
         try:
-            await client.post(url, json=payload)
-        except Exception:
-            logger.exception("Failed to send Telegram message")
+            async with httpx.AsyncClient(timeout=300.0) as client:
+                response = await client.post(url, json=payload)
+                data = response.json()
+                return data.get("message", {}).get("content", "Empty response.")
+        except Exception as exc: return f"Ollama failed: {exc}"
+    
+    # OpenRouter logic
+    return "OpenRouter logic here..."
 
 async def poll_telegram():
-    logger.info(f"Starting custom Telegram polling bot (Model: {OLLAMA_MODEL})...")
+    logger.info("Bot started.")
     offset = 0
     async with httpx.AsyncClient(timeout=35.0) as client:
         while True:
             try:
-                url = f"{TELEGRAM_API}/getUpdates?offset={offset}&timeout=30"
-                response = await client.get(url)
-                if response.status_code != 200:
-                    await asyncio.sleep(5)
-                    continue
-                
-                data = response.json()
-                for result in data.get("result", []):
+                resp = await client.get(f"{TELEGRAM_API}/getUpdates?offset={offset}&timeout=30")
+                for result in resp.json().get("result", []):
                     offset = result["update_id"] + 1
-                    message = result.get("message")
-                    if not message:
-                        continue
+                    msg = result.get("message", {})
+                    if str(msg.get("from", {}).get("id")) != OWNER_TELEGRAM_ID: continue
+                    text = msg.get("text", "")
                     
-                    user = message.get("from", {})
-                    user_id = str(user.get("id", ""))
-                    chat_id = str(message.get("chat", {}).get("id", ""))
-                    text = message.get("text", "").strip()
-
-                    # Security check: Ignore anyone who is not you!
-                    if user_id != OWNER_TELEGRAM_ID:
-                        logger.warning(f"Ignored unauthorized message from user_id: {user_id}")
-                        await send_telegram_message(chat_id, "Unauthorized. This bot is private.")
-                        continue
-
-                    if not text:
-                        continue
-
-                    logger.info(f"Received owner command: {text}")
-                    
-                    if text.lower() == "/status":
-                        await send_telegram_message(chat_id, f"🟢 Custom Oracle Bot active. Model: {OLLAMA_MODEL}")
-                        continue
-
-                    await send_telegram_message(chat_id, "🧠 Thinking...")
-                    reply = await query_ollama(text)
-                    await send_telegram_message(chat_id, reply)
-
-            except (httpx.ReadTimeout, httpx.ConnectTimeout):
-                continue
-            except Exception:
-                logger.exception("Error in polling loop")
-                await asyncio.sleep(5)
+                    # Simple handling
+                    reply = await query_llm(get_pref(str(msg["chat"]["id"]))["provider"], "", text)
+                    await client.post(f"{TELEGRAM_API}/sendMessage", json={"chat_id": msg["chat"]["id"], "text": reply})
+            except Exception: await asyncio.sleep(5)
 
 if __name__ == "__main__":
     asyncio.run(poll_telegram())
