@@ -22,3 +22,4 @@ data/*
 .DS_Store
 .vscode/
 .idea/
+project_dump.txt
