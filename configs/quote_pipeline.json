@@ -1,6 +1,6 @@
 {
   "pipeline_name": "Daily Quote Summarizer",
-  "api_url": "https://kanye.rest",
+  "api_url": "https://api.kanye.rest/",
   "api_method": "GET",
   "fallback_responses": [
     {"quote": "Simplicity is prerequisite for reliability."},
