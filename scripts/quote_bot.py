@@ -24,19 +24,37 @@ logger = logging.getLogger(__name__)
 
 
 async def get_random_quote() -> dict:
-    headers = {"User-Agent": "Mozilla/5.0 (ORACLE_CHAT QuoteWorker/1.0)", "Accept": "application/json"}
+    import random
+    headers = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
     async with httpx.AsyncClient(timeout=15.0, headers=headers, follow_redirects=True) as client:
+        # 1. Try Stoic Quotes API
         try:
-            resp = await client.get("https://dummyjson.com")
-            if resp.status_code == 200 and resp.text.strip():
-                return resp.json()
-        except Exception as exc:
-            logger.warning(f"Primary quote API failed ({exc}), trying fallback...")
+            r = await client.get("https://stoic-quotes.com")
+            if r.status_code == 200 and r.text.strip().startswith("{"):
+                d = r.json()
+                if d.get("text"):
+                    return {"quote": d["text"], "author": d.get("author", "Unknown")}
+        except Exception:
+            pass
 
-        resp = await client.get("https://zenquotes.io")
-        resp.raise_for_status()
-        items = resp.json()
-        return {"quote": items[0]["q"], "author": items[0]["a"]}
+        # 2. Try Forismatic API
+        try:
+            r = await client.get("https://forismatic.com")
+            if r.status_code == 200 and r.text.strip().startswith("{"):
+                d = r.json()
+                if d.get("quoteText"):
+                    return {"quote": d["quoteText"].strip(), "author": d.get("quoteAuthor", "Unknown").strip() or "Unknown"}
+        except Exception:
+            pass
+
+    # 3. Built-in fallback if datacenter IP is blocked by external APIs
+    fallbacks = [
+        {"quote": "Simplicity is prerequisite for reliability.", "author": "Edsger W. Dijkstra"},
+        {"quote": "We suffer more often in imagination than in reality.", "author": "Seneca"},
+        {"quote": "The impediment to action advances action. What stands in the way becomes the way.", "author": "Marcus Aurelius"},
+        {"quote": "First, solve the problem. Then, write the code.", "author": "John Johnson"},
+    ]
+    return random.choice(fallbacks)
 
 
 async def summarize_with_ollama(quote_data: dict) -> str:
