@@ -1,0 +1,69 @@
+{
+  "pipeline_name": "Google Trends Monitor",
+  "api_url": "https://api.brightdata.com/request",
+  "api_method": "POST",
+  "api_headers": {
+    "Content-Type": "application/json",
+    "Authorization": "Bearer ${BRIGHTDATA_API_TOKEN}"
+  },
+  "api_body": {
+    "zone": "${BRIGHTDATA_ZONE}",
+    "url": "https://trends.google.com/trends/explore?q=AI&geo=SG&date=now+7-d&brd_trends=timeseries,geo_map&brd_json=1",
+    "format": "raw"
+  },
+  "fallback_responses": [
+    {
+      "query": "AI",
+      "geo": "SG",
+      "timeseries": [
+        {"time": "2026-11-25", "value": [78], "formattedValue": ["78"]},
+        {"time": "2026-11-26", "value": [92], "formattedValue": ["92"]},
+        {"time": "2026-11-27", "value": [100], "formattedValue": ["100"]}
+      ],
+      "geo_map": [
+        {
+          "geoCode": "SG",
+          "geoName": "Singapore",
+          "value": [100],
+          "formattedValue": ["100"],
+          "maxValueIndex": 0,
+          "hasData": [true]
+        }
+      ]
+    }
+  ],
+  "example_api_responses": [
+    {
+      "query": "coffee",
+      "geo": "GB",
+      "timeseries": [
+        {"time": "2026-11-20", "value": [64], "formattedValue": ["64"]},
+        {"time": "2026-11-27", "value": [85], "formattedValue": ["85"]}
+      ],
+      "geo_map": [
+        {
+          "geoCode": "US-DC",
+          "geoName": "District of Columbia",
+          "value": [100],
+          "formattedValue": ["100"],
+          "maxValueIndex": 0,
+          "hasData": [true]
+        },
+        {
+          "geoCode": "GB-ENG",
+          "geoName": "England",
+          "value": [88],
+          "formattedValue": ["88"],
+          "maxValueIndex": 0,
+          "hasData": [true]
+        }
+      ]
+    }
+  ],
+  "llm_prompt": "Analyze the Google Trends JSON payload (matching the provided Master JSON Schema). Identify the trend direction/peak from timeseries and top regions from geo_map, summarize what the trend shows in ~80-100 words, create a punchy headline, classify the trend category in 1-2 words, and include the provided UTC timestamp in generated_at.",
+  "ollama_model": "gemma4:e4b-it-qat",
+  "trigger_interval_seconds": 3600,
+  "notify_template": "📈 {pipeline_name}\n\n📌 {headline} [{category}]\n\n🤖 Local Ollama Analysis:\n{summary}\n\n🕒 {generated_at}",
+  "db_table_name": "google_trends_logs",
+  "feedback_prompt_instructions": "If the user likes or approves of your trend summary, thank them and note what insight helped. If they dislike or critique it, apologize and note what to improve next cycle. Keep it under 80 words."
+}
