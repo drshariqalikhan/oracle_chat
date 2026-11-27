@@ -29,10 +29,6 @@ logger = logging.getLogger(__name__)
 
 import re as _re
 _tok = _re.search(r"(\d+:[A-Za-z0-9_-]+)", os.getenv("TELEGRAM_BOT_TOKEN", ""))
-TELEGRAM_BOT_TOKEN = _tok.group(1) if _tok else ""
-_t = os.getenv("TELEGRAM_BOT_TOKEN", "").strip().strip("'\"")
-_t = _t.split("/bot")[-1] if "/bot" in _t else _t
-TELEGRAM_BOT_TOKEN = _t
 TELEGRAM_API = "https://telegram.org" + TELEGRAM_BOT_TOKEN
 
 
