@@ -33,20 +33,10 @@ async def get_random_quote() -> dict:
             if r.status_code == 200 and r.text.strip().startswith("{"):
                 d = r.json()
                 logger.info(f"json res : {d}")
-                if d.get("text"):
-                    return {"quote": d["text"], "author": d.get("author", "Unknown")}
+                if d.get("quote"):
+                    return {"quote": d["quote"], "author": "ye!"}
         except Exception:
             logger.info(f"fail api call : {Exception}")
-            pass
-
-        # 2. Try Forismatic API
-        try:
-            r = await client.get("https://api.kanye.rest/")
-            if r.status_code == 200 and r.text.strip().startswith("{"):
-                d = r.json()
-                if d.get("quoteText"):
-                    return {"quote": d["quoteText"].strip(), "author": d.get("quoteAuthor", "Unknown").strip() or "ye!"}
-        except Exception:
             pass
 
     # 3. Built-in fallback if datacenter IP is blocked by external APIs
