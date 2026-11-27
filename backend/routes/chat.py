@@ -14,11 +14,15 @@ from backend.models import (
     SessionListResponse,
     SessionSummary,
     StandardizedLLMOutput,
+    ToolRunRequest,
+    ToolTrace,
 )
 from backend.services.a2ui_service import ALL_BASIC_COMPONENTS, A2uiService
+from backend.services.agent_service import AgentResult, AgentService
 from backend.services.file_service import FileService, FileValidationError
 from backend.services.image_service import ImageService, ImageValidationError
 from backend.services.memory_service import MemoryService
+from backend.tools.registry import create_default_tool_registry
 
 router = APIRouter(tags=["chat"])
 
@@ -28,11 +32,18 @@ UPLOADS_DIR = Path(__file__).resolve().parent.parent.parent / "uploads"
 
 _pinned_free_model: str | None = None
 _pinned_vision_model: str | None = None
+_pinned_tool_model: str | None = None
 
 memory_service = MemoryService()
 image_service = ImageService(uploads_dir=UPLOADS_DIR)
 file_service = FileService(uploads_dir=UPLOADS_DIR)
 a2ui_service = A2uiService()
+tool_registry = create_default_tool_registry(
+    memory_service=memory_service,
+    file_service=file_service,
+    uploads_dir=UPLOADS_DIR,
+)
+agent_service = AgentService(tool_registry=tool_registry, max_steps=5)
 
 
 @router.get("/api/providers")
@@ -45,6 +56,20 @@ async def get_provider_config() -> dict[str, Any]:
         "openrouter_configured": bool(settings.openrouter_api_key),
         "supported_providers": list(SUPPORTED_PROVIDERS),
     }
+
+
+@router.get("/api/tools")
+async def list_available_tools() -> dict[str, Any]:
+    tools = tool_registry.list_tools()
+    return {"status": "ok", "count": len(tools), "tools": tools}
+
+
+@router.post("/api/tools/{tool_name}/run")
+async def run_tool_directly(tool_name: str, payload: ToolRunRequest) -> dict[str, Any]:
+    if not tool_registry.get(tool_name):
+        raise HTTPException(status_code=404, detail=f"Tool '{tool_name}' not found.")
+    result = await tool_registry.execute(tool_name, payload.arguments)
+    return {"status": "ok", "tool": tool_name, "result": result}
 
 
 @router.get("/chat/sessions", response_model=SessionListResponse)
@@ -116,18 +141,21 @@ async def get_pinned_model() -> dict[str, str | None]:
     return {
         "pinned_model": _pinned_free_model,
         "pinned_vision_model": _pinned_vision_model,
+        "pinned_tool_model": _pinned_tool_model,
     }
 
 
 @router.post("/chat/reset-model")
 async def reset_pinned_model() -> dict[str, str | None]:
-    global _pinned_free_model, _pinned_vision_model
+    global _pinned_free_model, _pinned_vision_model, _pinned_tool_model
     _pinned_free_model = None
     _pinned_vision_model = None
+    _pinned_tool_model = None
     return {
         "status": "ok",
         "pinned_model": None,
         "pinned_vision_model": None,
+        "pinned_tool_model": None,
     }
 
 
@@ -216,7 +244,7 @@ async def _parse_with_optional_repair(
 
 @router.post("/chat", response_model=ChatResponse)
 async def chat(payload: ChatRequest) -> ChatResponse:
-    global _pinned_free_model, _pinned_vision_model
+    global _pinned_free_model, _pinned_vision_model, _pinned_tool_model
 
     settings = get_settings()
     session_id = (payload.session_id or "").strip() or memory_service.create_session_id()
@@ -269,6 +297,8 @@ async def chat(payload: ChatRequest) -> ChatResponse:
     documents_context = memory_service.get_documents_context(session_id)
     has_document_context = bool(documents_context)
 
+    use_tools = bool(payload.enable_tools and not is_vision and active_provider == "openrouter")
+
     a2ui_system_prompt = a2ui_service.build_system_prompt(
         payload.ui_mode,
         provider=active_provider,
@@ -277,9 +307,20 @@ async def chat(payload: ChatRequest) -> ChatResponse:
     base_history: list[dict[str, Any]] = []
     if a2ui_system_prompt:
         base_history.append({"role": "system", "content": a2ui_system_prompt})
+    if use_tools:
+        base_history.append(
+            {
+                "role": "system",
+                "content": (
+                    "You have access to backend tools on the Oracle VM (VM status, SQLite chat DB search, "
+                    "uploaded files/documents, and a local Ollama worker). Call a tool only when needed to "
+                    "answer accurately."
+                ),
+            }
+        )
     base_history.extend(prior_messages)
 
-    async def run_inference(target_model: str | None) -> LLMResponse:
+    async def run_inference(target_model: str | None) -> AgentResult:
         if is_vision and image_data_url is not None:
             vision_history = list(base_history)
             if documents_context:
@@ -289,25 +330,54 @@ async def chat(payload: ChatRequest) -> ChatResponse:
                         "content": f"Uploaded document context:\n\n{documents_context}",
                     }
                 )
-            return await provider.analyze_image(
+            resp = await provider.analyze_image(
                 prompt=payload.message,
                 image_data_url=image_data_url,
                 history=vision_history,
                 model=target_model,
             )
+            return AgentResult(response=resp, tool_traces=[])
 
         if documents_context:
-            return await provider.process_document(
+            if use_tools:
+                doc_messages = [
+                    *base_history,
+                    {
+                        "role": "user",
+                        "content": (
+                            "Use the following uploaded document content to answer the user's questions accurately.\n\n"
+                            f"{documents_context}"
+                        ),
+                    },
+                    {"role": "user", "content": payload.message},
+                ]
+                return await agent_service.run(
+                    provider=provider,
+                    messages=doc_messages,
+                    model=target_model,
+                    enable_tools=True,
+                )
+            resp = await provider.process_document(
                 prompt=payload.message,
                 document_context=documents_context,
                 history=base_history,
                 model=target_model,
             )
+            return AgentResult(response=resp, tool_traces=[])
 
-        return await provider.chat(
+        if use_tools:
+            return await agent_service.run(
+                provider=provider,
+                messages=[*base_history, {"role": "user", "content": payload.message}],
+                model=target_model,
+                enable_tools=True,
+            )
+
+        resp = await provider.chat(
             messages=[*base_history, {"role": "user", "content": payload.message}],
             model=target_model,
         )
+        return AgentResult(response=resp, tool_traces=[])
 
     memory_prefixes: list[str] = []
     if payload.image_id:
@@ -325,21 +395,25 @@ async def chat(payload: ChatRequest) -> ChatResponse:
     if active_provider == "openrouter" and requested_model == FREE_ROUTER_MODEL:
         if is_vision:
             active_pinned = (payload.pinned_vision_model or "").strip() or _pinned_vision_model
+        elif use_tools:
+            active_pinned = (payload.pinned_tool_model or "").strip() or _pinned_tool_model
         else:
             active_pinned = (payload.pinned_model or "").strip() or _pinned_free_model
 
         target_model = active_pinned or FREE_ROUTER_MODEL
 
         try:
-            result = await run_inference(target_model)
+            agent_result = await run_inference(target_model)
         except LLMProviderError as exc:
             if target_model != FREE_ROUTER_MODEL and exc.status_code in RETRIABLE_PIN_STATUSES:
                 if is_vision:
                     _pinned_vision_model = None
+                elif use_tools:
+                    _pinned_tool_model = None
                 else:
                     _pinned_free_model = None
                 try:
-                    result = await run_inference(FREE_ROUTER_MODEL)
+                    agent_result = await run_inference(FREE_ROUTER_MODEL)
                 except LLMProviderError as retry_exc:
                     raise HTTPException(
                         status_code=retry_exc.status_code,
@@ -348,9 +422,12 @@ async def chat(payload: ChatRequest) -> ChatResponse:
             else:
                 raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
 
+        result = agent_result.response
         if result.model and result.model != FREE_ROUTER_MODEL:
             if is_vision:
                 _pinned_vision_model = result.model
+            elif use_tools:
+                _pinned_tool_model = result.model
             else:
                 _pinned_free_model = result.model
 
@@ -368,6 +445,11 @@ async def chat(payload: ChatRequest) -> ChatResponse:
             assistant_reply=standardized.text,
         )
 
+        pin_flag = bool(
+            _pinned_vision_model
+            if is_vision
+            else (_pinned_tool_model if use_tools else _pinned_free_model)
+        )
         return ChatResponse(
             reply=standardized.text,
             output=standardized,
@@ -375,19 +457,21 @@ async def chat(payload: ChatRequest) -> ChatResponse:
             history_length=len(updated_history),
             provider=active_provider,
             model=final_result.model,
-            pinned=bool(_pinned_vision_model if is_vision else _pinned_free_model),
+            pinned=pin_flag,
             vision_used=is_vision,
             document_used=has_document_context,
+            tools_used=bool(agent_result.tool_traces),
+            tool_traces=[ToolTrace(**t) for t in agent_result.tool_traces],
         )
 
     try:
-        result = await run_inference(requested_model or None)
+        agent_result = await run_inference(requested_model or None)
     except LLMProviderError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
 
     standardized, final_result = await _parse_with_optional_repair(
         provider=provider,
-        initial_result=result,
+        initial_result=agent_result.response,
         base_history=base_history,
         user_prompt=payload.message,
         ui_mode=payload.ui_mode,
@@ -409,4 +493,6 @@ async def chat(payload: ChatRequest) -> ChatResponse:
         pinned=False,
         vision_used=is_vision,
         document_used=has_document_context,
+        tools_used=bool(agent_result.tool_traces),
+        tool_traces=[ToolTrace(**t) for t in agent_result.tool_traces],
     )

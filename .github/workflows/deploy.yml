@@ -31,11 +31,33 @@ jobs:
             pip install --upgrade pip
             pip install -r requirements.txt
 
-            echo "=== Restarting oracle-chat service ==="
-            sudo systemctl daemon-reload
-            sudo systemctl restart oracle-chat
+            echo "=== Setting up systemd service for Telegram Bot ==="
+            sudo tee /etc/systemd/system/oracle-bot.service > /dev/null << 'SERVICE'
+            [Unit]
+            Description=Custom Telegram Ollama Bot
+            After=network.target ollama.service
+            Wants=ollama.service
 
-            echo "=== Checking health ==="
+            [Service]
+            Type=simple
+            User=ubuntu
+            WorkingDirectory=/home/ubuntu/oracle_chat
+            EnvironmentFile=/home/ubuntu/oracle_chat/.env
+            ExecStart=/home/ubuntu/oracle_chat/venv/bin/python /home/ubuntu/oracle_chat/bot/main.py
+            Restart=always
+            RestartSec=10
+            StandardOutput=journal
+            StandardError=journal
+
+            [Install]
+            WantedBy=multi-user.target
+            SERVICE
+
+            echo "=== Restarting oracle-bot service ==="
+            sudo systemctl daemon-reload
+            sudo systemctl enable oracle-bot
+            sudo systemctl restart oracle-bot
+
+            echo "=== Checking service health ==="
             sleep 2
-            sudo systemctl is-active --quiet oracle-chat && echo "oracle-chat service is ACTIVE and RUNNING!"
-            curl -s http://localhost:8080/health || exit 1
+            sudo systemctl is-active --quiet oracle-bot && echo "oracle-bot service is ACTIVE and RUNNING!"
