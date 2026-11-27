@@ -20,19 +20,6 @@ class StandardizedLLMOutput(BaseModel):
     validation_warnings: list[str] = Field(default_factory=list)
 
 
-class ToolTrace(BaseModel):
-    step: int
-    tool: str
-    arguments: dict[str, Any] = Field(default_factory=dict)
-    duration_ms: float
-    ok: bool = True
-    result_preview: str = ""
-
-
-class ToolRunRequest(BaseModel):
-    arguments: dict[str, Any] = Field(default_factory=dict)
-
-
 class SessionSummary(BaseModel):
     id: str
     title: str
@@ -52,13 +39,11 @@ class ChatRequest(BaseModel):
     document_id: str | None = None
     document_name: str | None = None
     ui_mode: Literal["auto", "a2ui", "text"] = "auto"
-    enable_tools: bool = True
     a2ui_action: A2uiActionPayload | None = None
     provider: str | None = None
     model: str | None = None
     pinned_model: str | None = None
     pinned_vision_model: str | None = None
-    pinned_tool_model: str | None = None
     api_key: str | None = None
     ollama_base_url: str | None = None
 
@@ -101,8 +86,6 @@ class ChatResponse(BaseModel):
     pinned: bool = False
     vision_used: bool = False
     document_used: bool = False
-    tools_used: bool = False
-    tool_traces: list[ToolTrace] = Field(default_factory=list)
 
 
 class ChatHistoryResponse(BaseModel):
