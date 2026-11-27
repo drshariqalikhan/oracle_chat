@@ -10,7 +10,13 @@ from dotenv import load_dotenv
 BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(BASE_DIR / ".env")
 
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+RAW_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+if "/bot" in RAW_TOKEN:
+    RAW_TOKEN = RAW_TOKEN.split("/bot", 1)[-1].strip("/")
+elif RAW_TOKEN.startswith("bot") and ":" in RAW_TOKEN:
+    RAW_TOKEN = RAW_TOKEN[3:]
+
+TELEGRAM_BOT_TOKEN = RAW_TOKEN
 OWNER_TELEGRAM_ID = os.getenv("OWNER_TELEGRAM_ID", "").strip()
 
 ACTIVE_PROVIDER = os.getenv("BOT_PROVIDER", "openrouter").strip().lower()
@@ -128,6 +134,9 @@ async def handle_command(chat_id: str, text: str) -> bool:
 
 
 async def poll_telegram() -> None:
+    if not TELEGRAM_BOT_TOKEN:
+        logger.error("TELEGRAM_BOT_TOKEN is empty in .env!")
+        return
     logger.info(f"Bot polling started. Conversation Provider={ACTIVE_PROVIDER}, Model={OPENROUTER_MODEL}")
     offset = 0
     async with httpx.AsyncClient(timeout=35.0) as client:

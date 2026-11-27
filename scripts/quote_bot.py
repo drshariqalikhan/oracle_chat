@@ -11,7 +11,13 @@ from dotenv import load_dotenv
 BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(BASE_DIR / ".env")
 
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+RAW_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+if "/bot" in RAW_TOKEN:
+    RAW_TOKEN = RAW_TOKEN.split("/bot", 1)[-1].strip("/")
+elif RAW_TOKEN.startswith("bot") and ":" in RAW_TOKEN:
+    RAW_TOKEN = RAW_TOKEN[3:]
+
+TELEGRAM_BOT_TOKEN = RAW_TOKEN
 OWNER_TELEGRAM_ID = os.getenv("OWNER_TELEGRAM_ID", "").strip()
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "gemma4:e4b-it-qat").strip()
 OLLAMA_API_URL = os.getenv("OLLAMA_API_URL", "http://localhost:11434/api/chat").strip()
@@ -22,10 +28,19 @@ logger = logging.getLogger(__name__)
 
 
 async def get_random_quote() -> dict:
-    async with httpx.AsyncClient(timeout=15.0) as client:
-        resp = await client.get("https://dummyjson.com")
+    headers = {"User-Agent": "Mozilla/5.0 (ORACLE_CHAT QuoteWorker/1.0)", "Accept": "application/json"}
+    async with httpx.AsyncClient(timeout=15.0, headers=headers, follow_redirects=True) as client:
+        try:
+            resp = await client.get("https://dummyjson.com")
+            if resp.status_code == 200 and resp.text.strip():
+                return resp.json()
+        except Exception as exc:
+            logger.warning(f"Primary quote API failed ({exc}), trying fallback...")
+
+        resp = await client.get("https://zenquotes.io")
         resp.raise_for_status()
-        return resp.json()
+        items = resp.json()
+        return {"quote": items[0]["q"], "author": items[0]["a"]}
 
 
 async def summarize_with_ollama(quote_data: dict) -> str:
@@ -55,26 +70,22 @@ async def summarize_with_ollama(quote_data: dict) -> str:
 
 
 async def notify_user(quote: dict, summary: str) -> None:
-    text = f"✨ Daily Quote Update\n\n\"{quote['quote']}\"\n— {quote['author']}\n\n🤖 Local Ollama Summary:\n{summary}"
-    url = f"https://telegram.org{TELEGRAM_BOT_TOKEN}/sendMessage"
-    async with httpx.AsyncClient(timeout=15.0) as client:
-        resp = await client.post(url, json={"chat_id": OWNER_TELEGRAM_ID, "text": text})
-        resp.raise_for_status()
-
-
+text = f"✨ Daily Quote Update\n\n"{quote['quote']}"\n— {quote['author']}\n\n🤖 Local Ollama Summary:\n{summary}"
+url = f"telegram.org{TELEGRAM_BOT_TOKEN}/sendMessage"
+async with httpx.AsyncClient(timeout=15.0) as client:
+resp = await client.post(url, json={"chat_id": OWNER_TELEGRAM_ID, "text": text})
+resp.raise_for_status()
 async def main() -> None:
-    logger.info(f"Quote worker started using local Ollama model: {OLLAMA_MODEL}")
-    while True:
-        try:
-            logger.info("Fetching new quote...")
-            quote = await get_random_quote()
-            summary = await summarize_with_ollama(quote)
-            await notify_user(quote, summary)
-            logger.info("Notification sent. Sleeping for 10 minutes.")
-        except Exception:
-            logger.exception("Error during quote cycle")
-        await asyncio.sleep(600)
-
-
-if __name__ == "__main__":
-    asyncio.run(main())
+logger.info(f"Quote worker started using local Ollama model: {OLLAMA_MODEL}")
+while True:
+try:
+logger.info("Fetching new quote...")
+quote = await get_random_quote()
+summary = await summarize_with_ollama(quote)
+await notify_user(quote, summary)
+logger.info("Notification sent. Sleeping for 10 minutes.")
+except Exception:
+logger.exception("Error during quote cycle")
+await asyncio.sleep(600)
+if name == "main":
+asyncio.run(main())
