@@ -97,23 +97,37 @@ def lookup_sent_quote(reply_id: int | None) -> dict | None:
         return None
     with sqlite3.connect(str(DB_PATH)) as conn:
         conn.row_factory = sqlite3.Row
-        row = conn.execute('SELECT quote, author, summary FROM sent_quotes WHERE message_id = ?', (reply_id,)).fetchone()
-        return dict(row) if row else None
+        has_routes = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='active_message_routes'"
+        ).fetchone()
+        if has_routes:
+            route = conn.execute(
+                "SELECT table_name, pipeline_name FROM active_message_routes WHERE message_id = ?",
+                (reply_id,),
+            ).fetchone()
+            if route:
+                tbl = route["table_name"]
+                row = conn.execute(
+                    f"SELECT pipeline_name, raw_api_json, summary_text FROM {tbl} WHERE message_id = ?",
+                    (reply_id,),
+                ).fetchone()
+                if row:
+                    return {
+                        "quote": f"[{row['pipeline_name']}] {row['raw_api_json']}",
+                        "author": row["pipeline_name"],
+                        "summary": row["summary_text"],
+                    }
 
-
-def save_feedback_entry(message_id: int, sentiment: str, user_opinion: str, bot_reply: str) -> None:
-    from datetime import datetime, timezone
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(str(DB_PATH)) as conn:
-        conn.execute(
-            'CREATE TABLE IF NOT EXISTS feedback_history ('
-            'id INTEGER PRIMARY KEY AUTOINCREMENT, message_id INTEGER, sentiment TEXT, '
-            'user_opinion TEXT, bot_reply TEXT, created_at TEXT)'
-        )
-        conn.execute(
-            'INSERT INTO feedback_history (message_id, sentiment, user_opinion, bot_reply, created_at) VALUES (?, ?, ?, ?, ?)',
-            (message_id, sentiment, user_opinion, bot_reply, datetime.now(timezone.utc).isoformat()),
-        )
+        has_legacy = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='sent_quotes'"
+        ).fetchone()
+        if has_legacy:
+            row = conn.execute(
+                "SELECT quote, author, summary FROM sent_quotes WHERE message_id = ?",
+                (reply_id,),
+            ).fetchone()
+            return dict(row) if row else None
+    return None
 
 
 async def handle_quote_feedback(chat_id: str, message_id: int, user_opinion: str, quote_record: dict) -> None:
@@ -221,10 +235,17 @@ async def poll_telegram() -> None:
                     if not text:
                         continue
 
-                    replied_id = (msg.get('reply_to_message') or {}).get('message_id')
-                    quote_record = lookup_sent_quote(replied_id)
-                    if quote_record:
-                        logger.info(f'Quote feedback received for message_id={replied_id}')
+                    replied_msg = msg.get("reply_to_message") or {}
+                    replied_id = replied_msg.get("message_id")
+                    if replied_id:
+                        quote_record = lookup_sent_quote(replied_id)
+                        if not quote_record:
+                            quote_record = {
+                                "quote": replied_msg.get("text", "Previous post"),
+                                "author": "ORACLE_CHAT",
+                                "summary": replied_msg.get("text", ""),
+                            }
+                        logger.info(f"Reply received for message_id={replied_id}; routing strictly to local Ollama.")
                         await handle_quote_feedback(chat_id, replied_id, text, quote_record)
                         continue
 
