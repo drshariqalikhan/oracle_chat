@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 
 import re as _re
 _tok = _re.search(r"(\d+:[A-Za-z0-9_-]+)", os.getenv("TELEGRAM_BOT_TOKEN", ""))
-TELEGRAM_API = "https://telegram.org" + TELEGRAM_BOT_TOKEN
+TELEGRAM_API = "https://api.telegram.org/bot" + TELEGRAM_BOT_TOKEN
 
 
 async def query_ollama(prompt: str) -> str:
@@ -83,7 +83,7 @@ async def query_openrouter(prompt: str) -> str:
 
 
 async def send_telegram_message(chat_id: str, text: str) -> None:
-    url = "https://telegram.org" + TELEGRAM_BOT_TOKEN + "/sendMessage"
+    url = "https://api.telegram.org/bot" + TELEGRAM_BOT_TOKEN + "/sendMessage"
     for i in range(0, len(text), 4000):
         chunk = text[i : i + 4000]
         async with httpx.AsyncClient(timeout=15.0) as client:
