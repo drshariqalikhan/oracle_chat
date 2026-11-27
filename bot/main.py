@@ -93,64 +93,80 @@ async def send_telegram_message(chat_id: str, text: str) -> None:
 
 
 def lookup_sent_quote(reply_id: int | None) -> dict | None:
+    logger.info(f"[DEBUG_REPLY] lookup_sent_quote called with reply_id={reply_id}, db_exists={DB_PATH.is_file()}, db_path={DB_PATH}")
     if not reply_id or not DB_PATH.is_file():
         return None
-    with sqlite3.connect(str(DB_PATH)) as conn:
-        conn.row_factory = sqlite3.Row
-        has_routes = conn.execute(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='active_message_routes'"
-        ).fetchone()
-        if has_routes:
-            route = conn.execute(
-                "SELECT table_name, pipeline_name FROM active_message_routes WHERE message_id = ?",
-                (reply_id,),
+    try:
+        with sqlite3.connect(str(DB_PATH)) as conn:
+            conn.row_factory = sqlite3.Row
+            has_routes = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='active_message_routes'"
             ).fetchone()
-            if route:
-                tbl = route["table_name"]
-                row = conn.execute(
-                    f"SELECT pipeline_name, raw_api_json, summary_text FROM {tbl} WHERE message_id = ?",
+            if has_routes:
+                route = conn.execute(
+                    "SELECT table_name, pipeline_name FROM active_message_routes WHERE message_id = ?",
                     (reply_id,),
                 ).fetchone()
-                if row:
-                    return {
-                        "quote": f"[{row['pipeline_name']}] {row['raw_api_json']}",
-                        "author": row["pipeline_name"],
-                        "summary": row["summary_text"],
-                    }
+                logger.info(f"[DEBUG_REPLY] active_message_routes match for {reply_id}: {dict(route) if route else None}")
+                if route:
+                    tbl = route["table_name"]
+                    row = conn.execute(
+                        f"SELECT pipeline_name, raw_api_json, summary_text FROM {tbl} WHERE message_id = ?",
+                        (reply_id,),
+                    ).fetchone()
+                    if row:
+                        return {
+                            "quote": f"[{row['pipeline_name']}] {row['raw_api_json']}",
+                            "author": row["pipeline_name"],
+                            "summary": row["summary_text"],
+                        }
 
-        has_legacy = conn.execute(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='sent_quotes'"
-        ).fetchone()
-        if has_legacy:
-            row = conn.execute(
-                "SELECT quote, author, summary FROM sent_quotes WHERE message_id = ?",
-                (reply_id,),
+            has_legacy = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='sent_quotes'"
             ).fetchone()
-            return dict(row) if row else None
+            if has_legacy:
+                row = conn.execute(
+                    "SELECT quote, author, summary FROM sent_quotes WHERE message_id = ?",
+                    (reply_id,),
+                ).fetchone()
+                logger.info(f"[DEBUG_REPLY] legacy sent_quotes match for {reply_id}: {bool(row)}")
+                return dict(row) if row else None
+    except Exception:
+        logger.exception(f"[DEBUG_REPLY] SQLite error looking up reply_id={reply_id}")
     return None
 
 
 async def handle_quote_feedback(chat_id: str, message_id: int, user_opinion: str, quote_record: dict) -> None:
-    await send_telegram_message(chat_id, '🧠 Reviewing your feedback with local Ollama...')
-    prompt = (
-        f"Quote: \"{quote_record['quote']}\" — {quote_record['author']}\n"
-        f"Your Summary: {quote_record['summary']}\n"
-        f"User Opinion: \"{user_opinion}\"\n\n"
-        'Instructions:\n'
-        '1. On the very first line, output ONLY "SENTIMENT: LIKE" or "SENTIMENT: DISLIKE".\n'
-        '2. On a new line, write your response (under 80 words): if LIKE, warmly thank the user and acknowledge why; '
-        'if DISLIKE, sincerely apologize and acknowledge their specific reason.'
-    )
-    raw_reply = await query_ollama(prompt)
-    sentiment = 'UNKNOWN'
-    clean_reply = raw_reply
-    lines = raw_reply.splitlines()
-    if lines and lines.upper().startswith('SENTIMENT:'):
-        tag = lines.split(':', 1)[-1].strip().upper()
-        sentiment = 'DISLIKE' if 'DISLIKE' in tag else ('LIKE' if 'LIKE' in tag else 'UNKNOWN')
-        clean_reply = '\n'.join(lines[1:]).strip() or raw_reply
-    save_feedback_entry(message_id, sentiment, user_opinion, clean_reply)
-    await send_telegram_message(chat_id, clean_reply)
+    try:
+        logger.info(f"[DEBUG_FEEDBACK] Starting feedback evaluation for message_id={message_id} via Ollama ({OLLAMA_MODEL})")
+        await send_telegram_message(chat_id, "🧠 Reviewing your feedback with local Ollama...")
+        prompt = (
+            f"Quote: \"{quote_record['quote']}\" — {quote_record['author']}\n"
+            f"Your Summary: {quote_record['summary']}\n"
+            f"User Opinion: \"{user_opinion}\"\n\n"
+            "Instructions:\n"
+            "1. On the very first line, output ONLY \"SENTIMENT: LIKE\" or \"SENTIMENT: DISLIKE\".\n"
+            "2. On a new line, write your response (under 80 words): if LIKE, warmly thank the user and acknowledge why; "
+            "if DISLIKE, sincerely apologize and acknowledge their specific reason."
+        )
+        raw_reply = await query_ollama(prompt)
+        logger.info(f"[DEBUG_FEEDBACK] Ollama raw reply ({len(raw_reply)} chars): {raw_reply[:120]!r}")
+
+        sentiment = "UNKNOWN"
+        clean_reply = raw_reply
+        lines = raw_reply.splitlines()
+        if lines and lines.upper().startswith("SENTIMENT:"):
+            tag = lines.split(":", 1)[-1].strip().upper()
+            sentiment = "DISLIKE" if "DISLIKE" in tag else ("LIKE" if "LIKE" in tag else "UNKNOWN")
+            clean_reply = "\n".join(lines[1:]).strip() or raw_reply
+
+        save_feedback_entry(message_id, sentiment, user_opinion, clean_reply)
+        logger.info(f"[DEBUG_FEEDBACK] Saved sentiment={sentiment} to DB; sending reply to chat_id={chat_id}")
+        await send_telegram_message(chat_id, clean_reply)
+        logger.info("[DEBUG_FEEDBACK] Feedback reply sent successfully.")
+    except Exception:
+        logger.exception(f"[DEBUG_FEEDBACK] Unhandled error in handle_quote_feedback for message_id={message_id}")
+        await send_telegram_message(chat_id, "⚠️ Error processing feedback with local Ollama. Check oracle-bot logs.")
 
 
 async def handle_command(chat_id: str, text: str) -> bool:
@@ -227,6 +243,7 @@ async def poll_telegram() -> None:
                     user_id = str(msg.get("from", {}).get("id", ""))
                     chat_id = str(msg.get("chat", {}).get("id", ""))
                     text = msg.get("text", "").strip()
+                    logger.info(f"[DEBUG_UPDATE] update_id={result.get('update_id')} user_id={user_id} msg_id={msg.get('message_id')} has_reply={bool(msg.get('reply_to_message'))} text={text[:50]!r}")
 
                     if user_id != OWNER_TELEGRAM_ID:
                         logger.warning(f"Unauthorized user ID: {user_id}")
