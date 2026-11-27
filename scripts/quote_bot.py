@@ -29,12 +29,14 @@ async def get_random_quote() -> dict:
     async with httpx.AsyncClient(timeout=15.0, headers=headers, follow_redirects=True) as client:
         # 1. Try Stoic Quotes API
         try:
-            r = await client.get("https://stoic-quotes.com")
+            r = await client.get("https://api.kanye.rest/")
             if r.status_code == 200 and r.text.strip().startswith("{"):
                 d = r.json()
+                logger.info(f"json res : {d}")
                 if d.get("text"):
                     return {"quote": d["text"], "author": d.get("author", "Unknown")}
         except Exception:
+            logger.info(f"fail api call : {Exception}")
             pass
 
         # 2. Try Forismatic API
