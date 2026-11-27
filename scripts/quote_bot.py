@@ -39,11 +39,11 @@ async def get_random_quote() -> dict:
 
         # 2. Try Forismatic API
         try:
-            r = await client.get("https://forismatic.com")
+            r = await client.get("https://api.kanye.rest/")
             if r.status_code == 200 and r.text.strip().startswith("{"):
                 d = r.json()
                 if d.get("quoteText"):
-                    return {"quote": d["quoteText"].strip(), "author": d.get("quoteAuthor", "Unknown").strip() or "Unknown"}
+                    return {"quote": d["quoteText"].strip(), "author": d.get("quoteAuthor", "Unknown").strip() or "ye!"}
         except Exception:
             pass
 
