@@ -7,7 +7,9 @@ from pathlib import Path
 import httpx
 from dotenv import load_dotenv
 
+import sqlite3
 BASE_DIR = Path(__file__).resolve().parent.parent
+DB_PATH = BASE_DIR / 'data' / 'quote_feedback.db'
 load_dotenv(BASE_DIR / ".env")
 
 import re as _re
@@ -90,6 +92,28 @@ async def send_telegram_message(chat_id: str, text: str) -> None:
             await client.post(url, json={"chat_id": chat_id, "text": chunk})
 
 
+def lookup_sent_quote(reply_id: int | None) -> dict | None:
+    if not reply_id or not DB_PATH.is_file():
+        return None
+    with sqlite3.connect(str(DB_PATH)) as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute('SELECT quote, author, summary FROM sent_quotes WHERE message_id = ?', (reply_id,)).fetchone()
+        return dict(row) if row else None
+
+
+async def handle_quote_feedback(chat_id: str, user_opinion: str, quote_record: dict) -> None:
+    await send_telegram_message(chat_id, '🧠 Reviewing your feedback with local Ollama...')
+    prompt = (
+        f"Quote: \"{quote_record['quote']}\" — {quote_record['author']}\n"
+        f"Your Summary: {quote_record['summary']}\n"
+        f"User Opinion: \"{user_opinion}\"\n\n"
+        'If the user likes or approves of your summary, warmly thank them and briefly acknowledge why. '
+        'If they dislike or critique it, sincerely apologize and acknowledge their specific reason. Keep it under 80 words.'
+    )
+    reply = await query_ollama(prompt)
+    await send_telegram_message(chat_id, reply)
+
+
 async def handle_command(chat_id: str, text: str) -> bool:
     global ACTIVE_PROVIDER, OLLAMA_MODEL, OPENROUTER_MODEL
 
@@ -158,6 +182,13 @@ async def poll_telegram() -> None:
                         continue
 
                     if not text:
+                        continue
+
+                    replied_id = (msg.get('reply_to_message') or {}).get('message_id')
+                    quote_record = lookup_sent_quote(replied_id)
+                    if quote_record:
+                        logger.info(f'Quote feedback received for message_id={replied_id}')
+                        await handle_quote_feedback(chat_id, text, quote_record)
                         continue
 
                     logger.info(f"Message received: {text[:60]}")
