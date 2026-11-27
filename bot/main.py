@@ -13,8 +13,8 @@ load_dotenv(BASE_DIR / ".env")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 OWNER_TELEGRAM_ID = os.getenv("OWNER_TELEGRAM_ID", "").strip()
 
-ACTIVE_PROVIDER = os.getenv("LLM_PROVIDER", "ollama").strip().lower()
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", os.getenv("MODEL_NAME", "gemma4:e4b-it-qat")).strip()
+ACTIVE_PROVIDER = os.getenv("BOT_PROVIDER", "openrouter").strip().lower()
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "gemma4:e4b-it-qat").strip()
 OLLAMA_API_URL = os.getenv("OLLAMA_API_URL", "http://localhost:11434/api/chat").strip()
 
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "").strip()
@@ -25,7 +25,7 @@ logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=lo
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
-TELEGRAM_API = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
+TELEGRAM_API = f"https://telegram.org{TELEGRAM_BOT_TOKEN}"
 
 
 async def query_ollama(prompt: str) -> str:
@@ -56,6 +56,8 @@ async def query_openrouter(prompt: str) -> str:
     headers = {
         "Authorization": f"Bearer {OPENROUTER_API_KEY}",
         "Content-Type": "application/json",
+        "HTTP-Referer": "https://github.com",
+        "X-Title": "ORACLE CHAT Bot",
     }
     payload = {
         "model": OPENROUTER_MODEL,
@@ -95,8 +97,9 @@ async def handle_command(chat_id: str, text: str) -> bool:
         current_model = OLLAMA_MODEL if ACTIVE_PROVIDER == "ollama" else OPENROUTER_MODEL
         status_msg = (
             f"ORACLE CHAT Bot Online\n"
-            f"Provider: {ACTIVE_PROVIDER}\n"
-            f"Model: {current_model}"
+            f"Conversation Provider: {ACTIVE_PROVIDER}\n"
+            f"Model: {current_model}\n"
+            f"Quote Background Task: local ollama ({OLLAMA_MODEL})"
         )
         await send_telegram_message(chat_id, status_msg)
         return True
@@ -107,7 +110,7 @@ async def handle_command(chat_id: str, text: str) -> bool:
             return True
         ACTIVE_PROVIDER = arg.lower()
         current_model = OLLAMA_MODEL if ACTIVE_PROVIDER == "ollama" else OPENROUTER_MODEL
-        await send_telegram_message(chat_id, f"Switched provider to: {ACTIVE_PROVIDER} ({current_model})")
+        await send_telegram_message(chat_id, f"Switched conversation provider to: {ACTIVE_PROVIDER} ({current_model})")
         return True
 
     if cmd == "/model":
@@ -125,7 +128,7 @@ async def handle_command(chat_id: str, text: str) -> bool:
 
 
 async def poll_telegram() -> None:
-    logger.info("Bot polling started.")
+    logger.info(f"Bot polling started. Conversation Provider={ACTIVE_PROVIDER}, Model={OPENROUTER_MODEL}")
     offset = 0
     async with httpx.AsyncClient(timeout=35.0) as client:
         while True:

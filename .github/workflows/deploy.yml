@@ -1,34 +1,34 @@
 name: Auto Deploy to Oracle VM
-
 on:
-  push:
-    branches:
-      - main
-
+push:
+branches:
+- main
 jobs:
-  deploy:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Deploy to Oracle VM
-        uses: appleboy/ssh-action@v1.2.0
-        with:
-          host: ${{ secrets.VM_HOST }}
-          username: ${{ secrets.VM_USER }}
-          key: ${{ secrets.VM_SSH_KEY }}
-          script: |
-            cd /home/ubuntu/oracle_chat
-            git fetch origin main
-            git reset --hard origin/main
-            
-            source venv/bin/activate
-            pip install -r requirements.txt
-            
-            # Copy and enable the new service
-            sudo cp deploy/oracle-bot.service /etc/systemd/system/oracle-bot.service
-            sudo systemctl daemon-reload
-            sudo systemctl enable oracle-bot
-            sudo systemctl restart oracle-bot
-            
-            # Restart your main web app too
-            sudo systemctl restart oracle-chat
+deploy:
+runs-on: ubuntu-latest
+steps:
+- uses: actions/checkout@v4
+- name: Deploy to Oracle VM
+uses: appleboy/ssh-action@v1.2.0
+with:
+host: ${{ secrets.VM_HOST }}
+username: ${{ secrets.VM_USER }}
+key: ${{ secrets.VM_SSH_KEY }}
+script: |
+cd /home/ubuntu/oracle_chat
+git fetch origin main
+git reset --hard origin/main
+source venv/bin/activate
+pip install -r requirements.txt
+# Interactive Telegram Bot (OpenRouter)
+sudo cp deploy/oracle-bot.service /etc/systemd/system/oracle-bot.service
+sudo systemctl daemon-reload
+sudo systemctl enable oracle-bot
+sudo systemctl restart oracle-bot
+# Background Quote Worker (Local Ollama)
+sudo cp deploy/oracle-quote-bot.service /etc/systemd/system/oracle-quote-bot.service
+sudo systemctl daemon-reload
+sudo systemctl enable oracle-quote-bot
+sudo systemctl restart oracle-quote-bot
+# Main Web App
+sudo systemctl restart oracle-chat
