@@ -110,6 +110,7 @@ class OllamaProvider(LLMProvider):
             "model": selected_model,
             "messages": messages,
             "stream": False,
+            "think": False,  # <--- DISBLES DEEP REASONING / CHAIN OF THOUGHT
             "options": {
                 "num_ctx": 4096,
             },
