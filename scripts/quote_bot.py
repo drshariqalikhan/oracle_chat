@@ -1,4 +1,19 @@
 #!/usr/bin/env python3
+"""
+QUOTE & FEEDBACK PIPELINE ARCHITECTURE:
+1. Trigger & Fetch:   scripts/quote_bot.py -> main() -> get_random_quote()
+   - Runs every 600s (10 min), fetches a quote from api.kanye.rest (with local fallback).
+2. Local Summary:     scripts/quote_bot.py -> summarize_with_ollama()
+   - Sends quote JSON to local Ollama (http://localhost:11434/api/chat) for a 100-word summary.
+3. Telegram & Save:   scripts/quote_bot.py -> notify_user() -> save_sent_quote()
+   - Posts summary to Telegram, captures returned message_id, and saves (message_id, quote, author, summary)
+     to data/quote_feedback.db.
+4. Reply Detection:   bot/main.py -> poll_telegram() -> lookup_sent_quote()
+   - Intercepts user replies (reply_to_message.message_id) matching a saved quote in data/quote_feedback.db
+     (non-reply messages continue to OpenRouter).
+5. Feedback Reply:    bot/main.py -> handle_quote_feedback() -> query_ollama() -> send_telegram_message()
+   - Sends original quote, summary, and user's opinion to local Ollama to reply with a thank-you or apology.
+"""
 import asyncio
 import logging
 import os
