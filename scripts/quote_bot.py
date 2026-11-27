@@ -66,7 +66,7 @@ async def summarize_with_ollama(quote_data: dict) -> str:
 
 
 async def notify_user(quote: dict, summary: str) -> None:
-text = f"✨ Daily Quote Update\n\n"{quote['quote']}"\n— {quote['author']}\n\n🤖 Local Ollama Summary:\n{summary}"
+    text = f"✨ Daily Quote Update\n\n\"{quote['quote']}\"\n— {quote['author']}\n\n🤖 Local Ollama Summary:\n{summary}"
 url = f"telegram.org{TELEGRAM_BOT_TOKEN}/sendMessage"
 async with httpx.AsyncClient(timeout=15.0) as client:
 resp = await client.post(url, json={"chat_id": OWNER_TELEGRAM_ID, "text": text})
