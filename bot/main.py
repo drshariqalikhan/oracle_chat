@@ -101,17 +101,42 @@ def lookup_sent_quote(reply_id: int | None) -> dict | None:
         return dict(row) if row else None
 
 
-async def handle_quote_feedback(chat_id: str, user_opinion: str, quote_record: dict) -> None:
+def save_feedback_entry(message_id: int, sentiment: str, user_opinion: str, bot_reply: str) -> None:
+    from datetime import datetime, timezone
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(str(DB_PATH)) as conn:
+        conn.execute(
+            'CREATE TABLE IF NOT EXISTS feedback_history ('
+            'id INTEGER PRIMARY KEY AUTOINCREMENT, message_id INTEGER, sentiment TEXT, '
+            'user_opinion TEXT, bot_reply TEXT, created_at TEXT)'
+        )
+        conn.execute(
+            'INSERT INTO feedback_history (message_id, sentiment, user_opinion, bot_reply, created_at) VALUES (?, ?, ?, ?, ?)',
+            (message_id, sentiment, user_opinion, bot_reply, datetime.now(timezone.utc).isoformat()),
+        )
+
+
+async def handle_quote_feedback(chat_id: str, message_id: int, user_opinion: str, quote_record: dict) -> None:
     await send_telegram_message(chat_id, '🧠 Reviewing your feedback with local Ollama...')
     prompt = (
         f"Quote: \"{quote_record['quote']}\" — {quote_record['author']}\n"
         f"Your Summary: {quote_record['summary']}\n"
         f"User Opinion: \"{user_opinion}\"\n\n"
-        'If the user likes or approves of your summary, warmly thank them and briefly acknowledge why. '
-        'If they dislike or critique it, sincerely apologize and acknowledge their specific reason. Keep it under 80 words.'
+        'Instructions:\n'
+        '1. On the very first line, output ONLY "SENTIMENT: LIKE" or "SENTIMENT: DISLIKE".\n'
+        '2. On a new line, write your response (under 80 words): if LIKE, warmly thank the user and acknowledge why; '
+        'if DISLIKE, sincerely apologize and acknowledge their specific reason.'
     )
-    reply = await query_ollama(prompt)
-    await send_telegram_message(chat_id, reply)
+    raw_reply = await query_ollama(prompt)
+    sentiment = 'UNKNOWN'
+    clean_reply = raw_reply
+    lines = raw_reply.splitlines()
+    if lines and lines.upper().startswith('SENTIMENT:'):
+        tag = lines.split(':', 1)[-1].strip().upper()
+        sentiment = 'DISLIKE' if 'DISLIKE' in tag else ('LIKE' if 'LIKE' in tag else 'UNKNOWN')
+        clean_reply = '\n'.join(lines[1:]).strip() or raw_reply
+    save_feedback_entry(message_id, sentiment, user_opinion, clean_reply)
+    await send_telegram_message(chat_id, clean_reply)
 
 
 async def handle_command(chat_id: str, text: str) -> bool:
@@ -152,6 +177,18 @@ async def handle_command(chat_id: str, text: str) -> bool:
         await send_telegram_message(chat_id, f"Active {ACTIVE_PROVIDER} model set to: {arg}")
         return True
 
+    if cmd == '/feedback_stats':
+        if not DB_PATH.is_file():
+            await send_telegram_message(chat_id, 'No feedback recorded yet.')
+            return True
+        with sqlite3.connect(str(DB_PATH)) as conn:
+            conn.execute('CREATE TABLE IF NOT EXISTS feedback_history (id INTEGER PRIMARY KEY AUTOINCREMENT, message_id INTEGER, sentiment TEXT, user_opinion TEXT, bot_reply TEXT, created_at TEXT)')
+            likes = conn.execute("SELECT COUNT(*) FROM feedback_history WHERE sentiment = 'LIKE'").fetchone()
+            dislikes = conn.execute("SELECT COUNT(*) FROM feedback_history WHERE sentiment = 'DISLIKE'").fetchone()
+            total = conn.execute('SELECT COUNT(*) FROM feedback_history').fetchone()
+        await send_telegram_message(chat_id, f'📊 Quote Summary Feedback Stats\nTotal Reviews: {total}\n👍 Likes: {likes}\n👎 Dislikes: {dislikes}')
+        return True
+
     return False
 
 
@@ -188,7 +225,7 @@ async def poll_telegram() -> None:
                     quote_record = lookup_sent_quote(replied_id)
                     if quote_record:
                         logger.info(f'Quote feedback received for message_id={replied_id}')
-                        await handle_quote_feedback(chat_id, text, quote_record)
+                        await handle_quote_feedback(chat_id, replied_id, text, quote_record)
                         continue
 
                     logger.info(f"Message received: {text[:60]}")
