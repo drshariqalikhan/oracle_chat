@@ -11,13 +11,9 @@ from dotenv import load_dotenv
 BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(BASE_DIR / ".env")
 
-RAW_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
-if "/bot" in RAW_TOKEN:
-    RAW_TOKEN = RAW_TOKEN.split("/bot", 1)[-1].strip("/")
-elif RAW_TOKEN.startswith("bot") and ":" in RAW_TOKEN:
-    RAW_TOKEN = RAW_TOKEN[3:]
-
-TELEGRAM_BOT_TOKEN = RAW_TOKEN
+import re as _re
+_m = _re.search(r"(\d+:[A-Za-z0-9_-]+)", os.getenv("TELEGRAM_BOT_TOKEN", ""))
+TELEGRAM_BOT_TOKEN = _m.group(1) if _m else ""
 OWNER_TELEGRAM_ID = os.getenv("OWNER_TELEGRAM_ID", "").strip()
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "gemma4:e4b-it-qat").strip()
 OLLAMA_API_URL = os.getenv("OLLAMA_API_URL", "http://localhost:11434/api/chat").strip()

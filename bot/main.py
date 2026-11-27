@@ -10,13 +10,9 @@ from dotenv import load_dotenv
 BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(BASE_DIR / ".env")
 
-RAW_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
-if "/bot" in RAW_TOKEN:
-    RAW_TOKEN = RAW_TOKEN.split("/bot", 1)[-1].strip("/")
-elif RAW_TOKEN.startswith("bot") and ":" in RAW_TOKEN:
-    RAW_TOKEN = RAW_TOKEN[3:]
-
-TELEGRAM_BOT_TOKEN = RAW_TOKEN
+import re as _re
+_m = _re.search(r"(\d+:[A-Za-z0-9_-]+)", os.getenv("TELEGRAM_BOT_TOKEN", ""))
+TELEGRAM_BOT_TOKEN = _m.group(1) if _m else ""
 OWNER_TELEGRAM_ID = os.getenv("OWNER_TELEGRAM_ID", "").strip()
 
 ACTIVE_PROVIDER = os.getenv("BOT_PROVIDER", "openrouter").strip().lower()
