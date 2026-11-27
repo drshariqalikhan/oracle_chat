@@ -85,6 +85,15 @@ class OllamaProvider(LLMProvider):
             if item.get("name")
         ]
 
+    async def _auto_detect_model(self) -> str:
+        models = await self.list_models()
+        if not models:
+            raise LLMProviderError(
+                "No local Ollama models installed. Run `sudo ollama pull <model_name>` on your VM.",
+                status_code=400,
+            )
+        return models[0]["name"]
+
     async def chat(
         self,
         messages: list[dict[str, Any]],
@@ -94,10 +103,7 @@ class OllamaProvider(LLMProvider):
         self._validate_base_url()
         selected_model = (model or "").strip() or self.default_model
         if not selected_model or selected_model == "openrouter/free":
-            raise LLMProviderError(
-                "No Ollama model specified. Select a local model in Settings or set MODEL_NAME in .env.",
-                status_code=400,
-            )
+            selected_model = await self._auto_detect_model()
 
         url = f"{self.base_url}/api/chat"
         payload: dict[str, Any] = {
