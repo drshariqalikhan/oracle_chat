@@ -65,23 +65,28 @@ async def summarize_with_ollama(quote_data: dict) -> str:
         return resp.json().get("message", {}).get("content", "Error summarizing.").strip()
 
 
+
 async def notify_user(quote: dict, summary: str) -> None:
     text = f"✨ Daily Quote Update\n\n\"{quote['quote']}\"\n— {quote['author']}\n\n🤖 Local Ollama Summary:\n{summary}"
-url = f"telegram.org{TELEGRAM_BOT_TOKEN}/sendMessage"
-async with httpx.AsyncClient(timeout=15.0) as client:
-resp = await client.post(url, json={"chat_id": OWNER_TELEGRAM_ID, "text": text})
-resp.raise_for_status()
+    url = "https://api.telegram.org/bot" + TELEGRAM_BOT_TOKEN + "/sendMessage"
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        resp = await client.post(url, json={"chat_id": OWNER_TELEGRAM_ID, "text": text})
+        resp.raise_for_status()
+
+
 async def main() -> None:
-logger.info(f"Quote worker started using local Ollama model: {OLLAMA_MODEL}")
-while True:
-try:
-logger.info("Fetching new quote...")
-quote = await get_random_quote()
-summary = await summarize_with_ollama(quote)
-await notify_user(quote, summary)
-logger.info("Notification sent. Sleeping for 10 minutes.")
-except Exception:
-logger.exception("Error during quote cycle")
-await asyncio.sleep(600)
-if name == "main":
-asyncio.run(main())
+    logger.info(f"Quote worker started using local Ollama model: {OLLAMA_MODEL}")
+    while True:
+        try:
+            logger.info("Fetching new quote...")
+            quote = await get_random_quote()
+            summary = await summarize_with_ollama(quote)
+            await notify_user(quote, summary)
+            logger.info("Notification sent. Sleeping for 10 minutes.")
+        except Exception:
+            logger.exception("Error during quote cycle")
+        await asyncio.sleep(600)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
