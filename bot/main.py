@@ -155,8 +155,8 @@ async def handle_quote_feedback(chat_id: str, message_id: int, user_opinion: str
         sentiment = "UNKNOWN"
         clean_reply = raw_reply
         lines = raw_reply.splitlines()
-        if lines and lines.upper().startswith("SENTIMENT:"):
-            tag = lines.split(":", 1)[-1].strip().upper()
+        if lines and lines[0].upper().startswith("SENTIMENT:"):
+            tag = lines[0].split(":", 1)[-1].strip().upper()
             sentiment = "DISLIKE" if "DISLIKE" in tag else ("LIKE" if "LIKE" in tag else "UNKNOWN")
             clean_reply = "\n".join(lines[1:]).strip() or raw_reply
 
