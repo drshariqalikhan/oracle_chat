@@ -1,5 +1,5 @@
 [Unit]
-Description=Oracle Quote Notification Bot
+Description=Oracle Telegram Bot
 After=network.target ollama.service
 
 [Service]
@@ -7,9 +7,9 @@ Type=simple
 User=ubuntu
 WorkingDirectory=/home/ubuntu/oracle_chat
 EnvironmentFile=/home/ubuntu/oracle_chat/.env
-ExecStart=/home/ubuntu/oracle_chat/venv/bin/python /home/ubuntu/oracle_chat/scripts/run_bot.py
+ExecStart=/home/ubuntu/oracle_chat/venv/bin/python /home/ubuntu/oracle_chat/bot/main.py
 Restart=always
-RestartSec=60
+RestartSec=10
 
 [Install]
 WantedBy=multi-user.target
