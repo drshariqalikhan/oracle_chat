@@ -1,0 +1,20 @@
+{
+  "pipeline_name": "Daily Quote Summarizer",
+  "api_url": "https://kanye.rest",
+  "api_method": "GET",
+  "fallback_responses": [
+    {"quote": "Simplicity is prerequisite for reliability."},
+    {"quote": "We suffer more often in imagination than in reality."},
+    {"quote": "First, solve the problem. Then, write the code."}
+  ],
+  "example_api_responses": [
+    {"quote": "Let's be like water"},
+    {"quote": "I feel like I'm too busy writing history to read it."}
+  ],
+  "llm_prompt": "Analyze the quote from the API JSON payload (matching the provided Master JSON Schema). Explain what this quote really means in roughly 100 words, generate a short punchy headline, classify its theme in 1-2 words, and include the provided UTC timestamp in generated_at.",
+  "ollama_model": "gemma4:e4b-it-qat",
+  "trigger_interval_seconds": 600,
+  "notify_template": "✨ {pipeline_name}\n\n\"{quote}\"\n\n📌 {headline} [{category}]\n\n🤖 Local Ollama Summary:\n{summary}\n\n🕒 {generated_at}",
+  "db_table_name": "quote_pipeline_logs",
+  "feedback_prompt_instructions": "If the user likes or approves of your summary, warmly thank them and acknowledge their specific reason. If they dislike or critique it, sincerely apologize and acknowledge what they disliked. Keep it under 80 words."
+}
