@@ -136,6 +136,21 @@ def lookup_sent_quote(reply_id: int | None) -> dict | None:
     return None
 
 
+def save_feedback_entry(message_id: int, sentiment: str, user_opinion: str, bot_reply: str) -> None:
+    from datetime import datetime, timezone
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(str(DB_PATH)) as conn:
+        conn.execute(
+            'CREATE TABLE IF NOT EXISTS feedback_history ('
+            'id INTEGER PRIMARY KEY AUTOINCREMENT, message_id INTEGER, sentiment TEXT, '
+            'user_opinion TEXT, bot_reply TEXT, created_at TEXT)'
+        )
+        conn.execute(
+            'INSERT INTO feedback_history (message_id, sentiment, user_opinion, bot_reply, created_at) VALUES (?, ?, ?, ?, ?)',
+            (message_id, sentiment, user_opinion, bot_reply, datetime.now(timezone.utc).isoformat()),
+        )
+
+
 async def handle_quote_feedback(chat_id: str, message_id: int, user_opinion: str, quote_record: dict) -> None:
     try:
         logger.info(f"[DEBUG_FEEDBACK] Starting feedback evaluation for message_id={message_id} via Ollama ({OLLAMA_MODEL})")
