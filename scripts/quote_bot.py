@@ -7,12 +7,16 @@ QUOTE & FEEDBACK PIPELINE ARCHITECTURE:
    - Sends quote JSON to local Ollama (http://localhost:11434/api/chat) for a 100-word summary.
 3. Telegram & Save:   scripts/quote_bot.py -> notify_user() -> save_sent_quote()
    - Posts summary to Telegram, captures returned message_id, and saves (message_id, quote, author, summary)
-     to data/quote_feedback.db.
+     to the sent_quotes table in data/quote_feedback.db.
 4. Reply Detection:   bot/main.py -> poll_telegram() -> lookup_sent_quote()
    - Intercepts user replies (reply_to_message.message_id) matching a saved quote in data/quote_feedback.db
      (non-reply messages continue to OpenRouter).
-5. Feedback Reply:    bot/main.py -> handle_quote_feedback() -> query_ollama() -> send_telegram_message()
-   - Sends original quote, summary, and user's opinion to local Ollama to reply with a thank-you or apology.
+5. Feedback & Log:    bot/main.py -> handle_quote_feedback() -> query_ollama() -> save_feedback_entry()
+   - Sends original quote, summary, and user's opinion to local Ollama to classify sentiment (LIKE/DISLIKE),
+     logs (message_id, sentiment, user_opinion, bot_reply, created_at) into feedback_history in
+     data/quote_feedback.db, and replies with a thank-you or apology via send_telegram_message().
+6. Stats Command:     bot/main.py -> handle_command('/feedback_stats')
+   - Queries feedback_history in data/quote_feedback.db to report total reviews, likes, and dislikes.
 """
 import asyncio
 import logging
