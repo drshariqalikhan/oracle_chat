@@ -38,3 +38,14 @@ with open('project_dump.txt', 'w', encoding='utf-8') as out:
 
 print('Export complete! Check project_dump.txt')
 "
+
+
+Switch to OpenRouter on the fly:
+Text
+/provider openrouter
+What happens: The bot confirms the switch. Your next messages instantly route to OpenRouter (openrouter/free) in the cloud.
+Switch back to Ollama and specify your exact model:
+Text
+/provider ollama
+/model gemma4:e4b-it-qat
+What happens: The bot locks onto your local Gemma 4 model with zero service restarts required.
