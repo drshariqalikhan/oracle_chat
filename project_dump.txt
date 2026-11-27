@@ -25,58 +25,29 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Deploy to Oracle VM over SSH
+      - uses: actions/checkout@v4
+      - name: Deploy to Oracle VM
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.VM_HOST }}
           username: ${{ secrets.VM_USER }}
           key: ${{ secrets.VM_SSH_KEY }}
-          port: 22
           script: |
-            set -e
-            echo "=== Pulling latest changes on Oracle VM ==="
             cd /home/ubuntu/oracle_chat
             git fetch origin main
             git reset --hard origin/main
-
-            echo "=== Updating Python dependencies ==="
+            
             source venv/bin/activate
-            pip install --upgrade pip
             pip install -r requirements.txt
-
-            echo "=== Setting up systemd service for Telegram Bot ==="
-            sudo tee /etc/systemd/system/oracle-bot.service > /dev/null << 'SERVICE'
-            [Unit]
-            Description=Custom Telegram Ollama Bot
-            After=network.target ollama.service
-            Wants=ollama.service
-
-            [Service]
-            Type=simple
-            User=ubuntu
-            WorkingDirectory=/home/ubuntu/oracle_chat
-            EnvironmentFile=/home/ubuntu/oracle_chat/.env
-            ExecStart=/home/ubuntu/oracle_chat/venv/bin/python /home/ubuntu/oracle_chat/bot/main.py
-            Restart=always
-            RestartSec=10
-            StandardOutput=journal
-            StandardError=journal
-
-            [Install]
-            WantedBy=multi-user.target
-            SERVICE
-
-            echo "=== Restarting oracle-bot service ==="
+            
+            # Copy and enable the new service
+            sudo cp deploy/oracle-bot.service /etc/systemd/system/oracle-bot.service
             sudo systemctl daemon-reload
             sudo systemctl enable oracle-bot
             sudo systemctl restart oracle-bot
-
-            echo "=== Checking service health ==="
-            sleep 2
-            sudo systemctl is-active --quiet oracle-bot && echo "oracle-bot service is ACTIVE and RUNNING!"
+            
+            # Restart your main web app too
+            sudo systemctl restart oracle-chat
 
 === END FILE ===
 
@@ -733,6 +704,16 @@ with open('project_dump.txt', 'w', encoding='utf-8') as out:
 print('Export complete! Check project_dump.txt')
 "
 
+
+Switch to OpenRouter on the fly:
+Text
+/provider openrouter
+What happens: The bot confirms the switch. Your next messages instantly route to OpenRouter (openrouter/free) in the cloud.
+Switch back to Ollama and specify your exact model:
+Text
+/provider ollama
+/model gemma4:e4b-it-qat
+What happens: The bot locks onto your local Gemma 4 model with zero service restarts required.
 === END FILE ===
 
 === FILE: app/.gitkeep ===
@@ -974,6 +955,15 @@ class OllamaProvider(LLMProvider):
             if item.get("name")
         ]
 
+    async def _auto_detect_model(self) -> str:
+        models = await self.list_models()
+        if not models:
+            raise LLMProviderError(
+                "No local Ollama models installed. Run `sudo ollama pull <model_name>` on your VM.",
+                status_code=400,
+            )
+        return models[0]["name"]
+
     async def chat(
         self,
         messages: list[dict[str, Any]],
@@ -983,16 +973,14 @@ class OllamaProvider(LLMProvider):
         self._validate_base_url()
         selected_model = (model or "").strip() or self.default_model
         if not selected_model or selected_model == "openrouter/free":
-            raise LLMProviderError(
-                "No Ollama model specified. Select a local model in Settings or set MODEL_NAME in .env.",
-                status_code=400,
-            )
+            selected_model = await self._auto_detect_model()
 
         url = f"{self.base_url}/api/chat"
         payload: dict[str, Any] = {
             "model": selected_model,
             "messages": messages,
             "stream": False,
+            "think": False,  # <--- DISBLES DEEP REASONING / CHAIN OF THOUGHT
             "options": {
                 "num_ctx": 4096,
             },
@@ -1317,6 +1305,19 @@ class StandardizedLLMOutput(BaseModel):
     validation_warnings: list[str] = Field(default_factory=list)
 
 
+class ToolTrace(BaseModel):
+    step: int
+    tool: str
+    arguments: dict[str, Any] = Field(default_factory=dict)
+    duration_ms: float
+    ok: bool = True
+    result_preview: str = ""
+
+
+class ToolRunRequest(BaseModel):
+    arguments: dict[str, Any] = Field(default_factory=dict)
+
+
 class SessionSummary(BaseModel):
     id: str
     title: str
@@ -1336,11 +1337,13 @@ class ChatRequest(BaseModel):
     document_id: str | None = None
     document_name: str | None = None
     ui_mode: Literal["auto", "a2ui", "text"] = "auto"
+    enable_tools: bool = True
     a2ui_action: A2uiActionPayload | None = None
     provider: str | None = None
     model: str | None = None
     pinned_model: str | None = None
     pinned_vision_model: str | None = None
+    pinned_tool_model: str | None = None
     api_key: str | None = None
     ollama_base_url: str | None = None
 
@@ -1383,6 +1386,8 @@ class ChatResponse(BaseModel):
     pinned: bool = False
     vision_used: bool = False
     document_used: bool = False
+    tools_used: bool = False
+    tool_traces: list[ToolTrace] = Field(default_factory=list)
 
 
 class ChatHistoryResponse(BaseModel):
@@ -1436,11 +1441,15 @@ from backend.models import (
     SessionListResponse,
     SessionSummary,
     StandardizedLLMOutput,
+    ToolRunRequest,
+    ToolTrace,
 )
 from backend.services.a2ui_service import ALL_BASIC_COMPONENTS, A2uiService
+from backend.services.agent_service import AgentResult, AgentService
 from backend.services.file_service import FileService, FileValidationError
 from backend.services.image_service import ImageService, ImageValidationError
 from backend.services.memory_service import MemoryService
+from backend.tools.registry import create_default_tool_registry
 
 router = APIRouter(tags=["chat"])
 
@@ -1450,11 +1459,18 @@ UPLOADS_DIR = Path(__file__).resolve().parent.parent.parent / "uploads"
 
 _pinned_free_model: str | None = None
 _pinned_vision_model: str | None = None
+_pinned_tool_model: str | None = None
 
 memory_service = MemoryService()
 image_service = ImageService(uploads_dir=UPLOADS_DIR)
 file_service = FileService(uploads_dir=UPLOADS_DIR)
 a2ui_service = A2uiService()
+tool_registry = create_default_tool_registry(
+    memory_service=memory_service,
+    file_service=file_service,
+    uploads_dir=UPLOADS_DIR,
+)
+agent_service = AgentService(tool_registry=tool_registry, max_steps=5)
 
 
 @router.get("/api/providers")
@@ -1467,6 +1483,20 @@ async def get_provider_config() -> dict[str, Any]:
         "openrouter_configured": bool(settings.openrouter_api_key),
         "supported_providers": list(SUPPORTED_PROVIDERS),
     }
+
+
+@router.get("/api/tools")
+async def list_available_tools() -> dict[str, Any]:
+    tools = tool_registry.list_tools()
+    return {"status": "ok", "count": len(tools), "tools": tools}
+
+
+@router.post("/api/tools/{tool_name}/run")
+async def run_tool_directly(tool_name: str, payload: ToolRunRequest) -> dict[str, Any]:
+    if not tool_registry.get(tool_name):
+        raise HTTPException(status_code=404, detail=f"Tool '{tool_name}' not found.")
+    result = await tool_registry.execute(tool_name, payload.arguments)
+    return {"status": "ok", "tool": tool_name, "result": result}
 
 
 @router.get("/chat/sessions", response_model=SessionListResponse)
@@ -1538,18 +1568,21 @@ async def get_pinned_model() -> dict[str, str | None]:
     return {
         "pinned_model": _pinned_free_model,
         "pinned_vision_model": _pinned_vision_model,
+        "pinned_tool_model": _pinned_tool_model,
     }
 
 
 @router.post("/chat/reset-model")
 async def reset_pinned_model() -> dict[str, str | None]:
-    global _pinned_free_model, _pinned_vision_model
+    global _pinned_free_model, _pinned_vision_model, _pinned_tool_model
     _pinned_free_model = None
     _pinned_vision_model = None
+    _pinned_tool_model = None
     return {
         "status": "ok",
         "pinned_model": None,
         "pinned_vision_model": None,
+        "pinned_tool_model": None,
     }
 
 
@@ -1638,7 +1671,7 @@ async def _parse_with_optional_repair(
 
 @router.post("/chat", response_model=ChatResponse)
 async def chat(payload: ChatRequest) -> ChatResponse:
-    global _pinned_free_model, _pinned_vision_model
+    global _pinned_free_model, _pinned_vision_model, _pinned_tool_model
 
     settings = get_settings()
     session_id = (payload.session_id or "").strip() or memory_service.create_session_id()
@@ -1691,6 +1724,8 @@ async def chat(payload: ChatRequest) -> ChatResponse:
     documents_context = memory_service.get_documents_context(session_id)
     has_document_context = bool(documents_context)
 
+    use_tools = bool(payload.enable_tools and not is_vision and active_provider == "openrouter")
+
     a2ui_system_prompt = a2ui_service.build_system_prompt(
         payload.ui_mode,
         provider=active_provider,
@@ -1699,9 +1734,20 @@ async def chat(payload: ChatRequest) -> ChatResponse:
     base_history: list[dict[str, Any]] = []
     if a2ui_system_prompt:
         base_history.append({"role": "system", "content": a2ui_system_prompt})
+    if use_tools:
+        base_history.append(
+            {
+                "role": "system",
+                "content": (
+                    "You have access to backend tools on the Oracle VM (VM status, SQLite chat DB search, "
+                    "uploaded files/documents, and a local Ollama worker). Call a tool only when needed to "
+                    "answer accurately."
+                ),
+            }
+        )
     base_history.extend(prior_messages)
 
-    async def run_inference(target_model: str | None) -> LLMResponse:
+    async def run_inference(target_model: str | None) -> AgentResult:
         if is_vision and image_data_url is not None:
             vision_history = list(base_history)
             if documents_context:
@@ -1711,25 +1757,54 @@ async def chat(payload: ChatRequest) -> ChatResponse:
                         "content": f"Uploaded document context:\n\n{documents_context}",
                     }
                 )
-            return await provider.analyze_image(
+            resp = await provider.analyze_image(
                 prompt=payload.message,
                 image_data_url=image_data_url,
                 history=vision_history,
                 model=target_model,
             )
+            return AgentResult(response=resp, tool_traces=[])
 
         if documents_context:
-            return await provider.process_document(
+            if use_tools:
+                doc_messages = [
+                    *base_history,
+                    {
+                        "role": "user",
+                        "content": (
+                            "Use the following uploaded document content to answer the user's questions accurately.\n\n"
+                            f"{documents_context}"
+                        ),
+                    },
+                    {"role": "user", "content": payload.message},
+                ]
+                return await agent_service.run(
+                    provider=provider,
+                    messages=doc_messages,
+                    model=target_model,
+                    enable_tools=True,
+                )
+            resp = await provider.process_document(
                 prompt=payload.message,
                 document_context=documents_context,
                 history=base_history,
                 model=target_model,
             )
+            return AgentResult(response=resp, tool_traces=[])
 
-        return await provider.chat(
+        if use_tools:
+            return await agent_service.run(
+                provider=provider,
+                messages=[*base_history, {"role": "user", "content": payload.message}],
+                model=target_model,
+                enable_tools=True,
+            )
+
+        resp = await provider.chat(
             messages=[*base_history, {"role": "user", "content": payload.message}],
             model=target_model,
         )
+        return AgentResult(response=resp, tool_traces=[])
 
     memory_prefixes: list[str] = []
     if payload.image_id:
@@ -1747,21 +1822,25 @@ async def chat(payload: ChatRequest) -> ChatResponse:
     if active_provider == "openrouter" and requested_model == FREE_ROUTER_MODEL:
         if is_vision:
             active_pinned = (payload.pinned_vision_model or "").strip() or _pinned_vision_model
+        elif use_tools:
+            active_pinned = (payload.pinned_tool_model or "").strip() or _pinned_tool_model
         else:
             active_pinned = (payload.pinned_model or "").strip() or _pinned_free_model
 
         target_model = active_pinned or FREE_ROUTER_MODEL
 
         try:
-            result = await run_inference(target_model)
+            agent_result = await run_inference(target_model)
         except LLMProviderError as exc:
             if target_model != FREE_ROUTER_MODEL and exc.status_code in RETRIABLE_PIN_STATUSES:
                 if is_vision:
                     _pinned_vision_model = None
+                elif use_tools:
+                    _pinned_tool_model = None
                 else:
                     _pinned_free_model = None
                 try:
-                    result = await run_inference(FREE_ROUTER_MODEL)
+                    agent_result = await run_inference(FREE_ROUTER_MODEL)
                 except LLMProviderError as retry_exc:
                     raise HTTPException(
                         status_code=retry_exc.status_code,
@@ -1770,9 +1849,12 @@ async def chat(payload: ChatRequest) -> ChatResponse:
             else:
                 raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
 
+        result = agent_result.response
         if result.model and result.model != FREE_ROUTER_MODEL:
             if is_vision:
                 _pinned_vision_model = result.model
+            elif use_tools:
+                _pinned_tool_model = result.model
             else:
                 _pinned_free_model = result.model
 
@@ -1790,6 +1872,11 @@ async def chat(payload: ChatRequest) -> ChatResponse:
             assistant_reply=standardized.text,
         )
 
+        pin_flag = bool(
+            _pinned_vision_model
+            if is_vision
+            else (_pinned_tool_model if use_tools else _pinned_free_model)
+        )
         return ChatResponse(
             reply=standardized.text,
             output=standardized,
@@ -1797,19 +1884,21 @@ async def chat(payload: ChatRequest) -> ChatResponse:
             history_length=len(updated_history),
             provider=active_provider,
             model=final_result.model,
-            pinned=bool(_pinned_vision_model if is_vision else _pinned_free_model),
+            pinned=pin_flag,
             vision_used=is_vision,
             document_used=has_document_context,
+            tools_used=bool(agent_result.tool_traces),
+            tool_traces=[ToolTrace(**t) for t in agent_result.tool_traces],
         )
 
     try:
-        result = await run_inference(requested_model or None)
+        agent_result = await run_inference(requested_model or None)
     except LLMProviderError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
 
     standardized, final_result = await _parse_with_optional_repair(
         provider=provider,
-        initial_result=result,
+        initial_result=agent_result.response,
         base_history=base_history,
         user_prompt=payload.message,
         ui_mode=payload.ui_mode,
@@ -1831,6 +1920,8 @@ async def chat(payload: ChatRequest) -> ChatResponse:
         pinned=False,
         vision_used=is_vision,
         document_used=has_document_context,
+        tools_used=bool(agent_result.tool_traces),
+        tool_traces=[ToolTrace(**t) for t in agent_result.tool_traces],
     )
 
 === END FILE ===
@@ -2367,6 +2458,116 @@ class A2uiService:
 
 === END FILE ===
 
+=== FILE: backend/services/agent_service.py ===
+import json
+import time
+from dataclasses import dataclass, field
+from typing import Any
+
+from backend.llm.base import LLMProvider, LLMResponse
+from backend.tools.registry import ToolRegistry
+
+
+@dataclass(frozen=True)
+class AgentResult:
+    response: LLMResponse
+    tool_traces: list[dict[str, Any]] = field(default_factory=list)
+
+
+class AgentService:
+    def __init__(self, tool_registry: ToolRegistry, max_steps: int = 5) -> None:
+        self.tool_registry = tool_registry
+        self.max_steps = max_steps
+
+    @staticmethod
+    def _parse_tool_arguments(raw_args: Any) -> tuple[dict[str, Any], str | None]:
+        if raw_args is None or raw_args == "":
+            return {}, None
+        if isinstance(raw_args, dict):
+            return raw_args, None
+        if isinstance(raw_args, str):
+            try:
+                parsed = json.loads(raw_args)
+                if isinstance(parsed, dict):
+                    return parsed, None
+                return {}, f"Tool arguments must be a JSON object, got {type(parsed).__name__}"
+            except json.JSONDecodeError as exc:
+                return {}, f"Invalid JSON tool arguments: {exc}"
+        return {}, f"Unsupported argument type: {type(raw_args).__name__}"
+
+    async def run(
+        self,
+        provider: LLMProvider,
+        messages: list[dict[str, Any]],
+        model: str | None = None,
+        enable_tools: bool = True,
+    ) -> AgentResult:
+        tool_schemas = self.tool_registry.openai_schemas() if enable_tools else None
+        working_messages = [dict(m) for m in messages]
+        traces: list[dict[str, Any]] = []
+        last_response: LLMResponse | None = None
+
+        for step in range(1, self.max_steps + 1):
+            last_response = await provider.chat(
+                messages=working_messages,
+                model=model,
+                tools=tool_schemas,
+            )
+
+            if not last_response.tool_calls:
+                return AgentResult(response=last_response, tool_traces=traces)
+
+            assistant_tool_msg: dict[str, Any] = {
+                "role": "assistant",
+                "content": last_response.content or "",
+                "tool_calls": last_response.tool_calls,
+            }
+            working_messages.append(assistant_tool_msg)
+
+            for idx, tc in enumerate(last_response.tool_calls):
+                call_id = str(tc.get("id") or f"call_{step}_{idx}")
+                fn_obj = tc.get("function") or {}
+                tool_name = str(fn_obj.get("name") or tc.get("name") or "").strip()
+                raw_args = fn_obj.get("arguments", tc.get("arguments"))
+
+                parsed_args, parse_err = self._parse_tool_arguments(raw_args)
+                started = time.perf_counter()
+                if parse_err:
+                    result_obj: dict[str, Any] = {"error": parse_err}
+                else:
+                    result_obj = await self.tool_registry.execute(tool_name, parsed_args)
+                duration_ms = round((time.perf_counter() - started) * 1000, 1)
+
+                serialized_result = json.dumps(result_obj, default=str)
+                traces.append(
+                    {
+                        "step": step,
+                        "tool": tool_name,
+                        "arguments": parsed_args,
+                        "duration_ms": duration_ms,
+                        "ok": "error" not in result_obj,
+                        "result_preview": serialized_result[:400],
+                    }
+                )
+
+                working_messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": call_id,
+                        "name": tool_name,
+                        "content": serialized_result,
+                    }
+                )
+
+        final_response = await provider.chat(
+            messages=working_messages,
+            model=last_response.model if last_response else model,
+            tools=None,
+        )
+        return AgentResult(response=final_response, tool_traces=traces)
+
+=== END FILE ===
+
 === FILE: backend/services/file_service.py ===
 from dataclasses import dataclass
 from pathlib import Path
@@ -2880,6 +3081,97 @@ class MemoryService:
 
 === END FILE ===
 
+=== FILE: bot/__init__.py ===
+
+=== END FILE ===
+
+=== FILE: bot/main.py ===
+#!/usr/bin/env python3
+import asyncio
+import os
+import sys
+import logging
+import httpx
+from pathlib import Path
+from dotenv import load_dotenv
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+load_dotenv(BASE_DIR / ".env")
+
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+OWNER_TELEGRAM_ID = os.getenv("OWNER_TELEGRAM_ID", "").strip()
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen3.5:9b").strip()
+OLLAMA_API_URL = os.getenv("OLLAMA_API_URL", "http://localhost:11434/api/chat").strip()
+
+logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+TELEGRAM_API = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
+
+async def query_ollama(prompt: str) -> str:
+    logger.info(f"Querying Ollama model: {OLLAMA_MODEL} with prompt: {prompt[:50]}...")
+    payload = {
+        "model": OLLAMA_MODEL,
+        "messages": [{"role": "user", "content": prompt}],
+        "stream": False,
+        "options": {"num_ctx": 4096}
+    }
+    try:
+        async with httpx.AsyncClient(timeout=300.0) as client:
+            response = await client.post(OLLAMA_API_URL, json=payload)
+            if response.status_code != 200:
+                return f"Ollama error (HTTP {response.status_code}): {response.text}"
+            data = response.json()
+            return data.get("message", {}).get("content", "Empty response.")
+    except Exception as exc:
+        logger.exception("Failed to connect to Ollama")
+        return f"Failed to reach local Ollama engine: {exc}"
+
+async def send_telegram_message(chat_id: str, text: str):
+    url = f"{TELEGRAM_API}/sendMessage"
+    payload = {"chat_id": chat_id, "text": text}
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        await client.post(url, json=payload)
+
+async def poll_telegram():
+    logger.info("Bot polling started.")
+    offset = 0
+    async with httpx.AsyncClient(timeout=35.0) as client:
+        while True:
+            try:
+                resp = await client.get(f"{TELEGRAM_API}/getUpdates?offset={offset}&timeout=30")
+                if resp.status_code != 200:
+                    await asyncio.sleep(5); continue
+                
+                for result in resp.json().get("result", []):
+                    offset = result["update_id"] + 1
+                    msg = result.get("message", {})
+                    
+                    user_id = str(msg.get("from", {}).get("id", ""))
+                    chat_id = str(msg.get("chat", {}).get("id", ""))
+                    text = msg.get("text", "").strip()
+                    
+                    if user_id != OWNER_TELEGRAM_ID:
+                        logger.warning(f"Unauthorized: {user_id}")
+                        continue
+                    
+                    if not text:
+                        logger.info("Ignoring non-text message")
+                        continue
+
+                    logger.info(f"Command received: {text}")
+                    await send_telegram_message(chat_id, "🧠 Processing...")
+                    reply = await query_ollama(text)
+                    await send_telegram_message(chat_id, reply)
+            except Exception:
+                logger.exception("Polling error")
+                await asyncio.sleep(5)
+
+if __name__ == "__main__":
+    asyncio.run(poll_telegram())
+
+=== END FILE ===
+
 === FILE: data/.gitkeep ===
 
 === END FILE ===
@@ -2941,6 +3233,25 @@ To also pull `gemma3:4b` during setup:
     source venv/bin/activate
     pip install -r requirements.txt
     sudo systemctl restart oracle-chat
+
+=== END FILE ===
+
+=== FILE: deploy/oracle-bot.service ===
+[Unit]
+Description=Oracle Quote Notification Bot
+After=network.target ollama.service
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/oracle_chat
+EnvironmentFile=/home/ubuntu/oracle_chat/.env
+ExecStart=/home/ubuntu/oracle_chat/venv/bin/python /home/ubuntu/oracle_chat/scripts/run_bot.py
+Restart=always
+RestartSec=60
+
+[Install]
+WantedBy=multi-user.target
 
 === END FILE ===
 
@@ -6118,58 +6429,29 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Deploy to Oracle VM over SSH
+      - uses: actions/checkout@v4
+      - name: Deploy to Oracle VM
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.VM_HOST }}
           username: ${{ secrets.VM_USER }}
           key: ${{ secrets.VM_SSH_KEY }}
-          port: 22
           script: |
-            set -e
-            echo "=== Pulling latest changes on Oracle VM ==="
             cd /home/ubuntu/oracle_chat
             git fetch origin main
             git reset --hard origin/main
-
-            echo "=== Updating Python dependencies ==="
+            
             source venv/bin/activate
-            pip install --upgrade pip
             pip install -r requirements.txt
-
-            echo "=== Setting up systemd service for Telegram Bot ==="
-            sudo tee /etc/systemd/system/oracle-bot.service > /dev/null << 'SERVICE'
-            [Unit]
-            Description=Custom Telegram Ollama Bot
-            After=network.target ollama.service
-            Wants=ollama.service
-
-            [Service]
-            Type=simple
-            User=ubuntu
-            WorkingDirectory=/home/ubuntu/oracle_chat
-            EnvironmentFile=/home/ubuntu/oracle_chat/.env
-            ExecStart=/home/ubuntu/oracle_chat/venv/bin/python /home/ubuntu/oracle_chat/bot/main.py
-            Restart=always
-            RestartSec=10
-            StandardOutput=journal
-            StandardError=journal
-
-            [Install]
-            WantedBy=multi-user.target
-            SERVICE
-
-            echo "=== Restarting oracle-bot service ==="
+            
+            # Copy and enable the new service
+            sudo cp deploy/oracle-bot.service /etc/systemd/system/oracle-bot.service
             sudo systemctl daemon-reload
             sudo systemctl enable oracle-bot
             sudo systemctl restart oracle-bot
-
-            echo "=== Checking service health ==="
-            sleep 2
-            sudo systemctl is-active --quiet oracle-bot && echo "oracle-bot service is ACTIVE and RUNNING!"
+            
+            # Restart your main web app too
+            sudo systemctl restart oracle-chat
 
 === END FILE ===
 
@@ -6826,6 +7108,16 @@ with open('project_dump.txt', 'w', encoding='utf-8') as out:
 print('Export complete! Check project_dump.txt')
 "
 
+
+Switch to OpenRouter on the fly:
+Text
+/provider openrouter
+What happens: The bot confirms the switch. Your next messages instantly route to OpenRouter (openrouter/free) in the cloud.
+Switch back to Ollama and specify your exact model:
+Text
+/provider ollama
+/model gemma4:e4b-it-qat
+What happens: The bot locks onto your local Gemma 4 model with zero service restarts required.
 === END FILE ===
 
 === FILE: app/.gitkeep ===
@@ -7067,6 +7359,15 @@ class OllamaProvider(LLMProvider):
             if item.get("name")
         ]
 
+    async def _auto_detect_model(self) -> str:
+        models = await self.list_models()
+        if not models:
+            raise LLMProviderError(
+                "No local Ollama models installed. Run `sudo ollama pull <model_name>` on your VM.",
+                status_code=400,
+            )
+        return models[0]["name"]
+
     async def chat(
         self,
         messages: list[dict[str, Any]],
@@ -7076,16 +7377,14 @@ class OllamaProvider(LLMProvider):
         self._validate_base_url()
         selected_model = (model or "").strip() or self.default_model
         if not selected_model or selected_model == "openrouter/free":
-            raise LLMProviderError(
-                "No Ollama model specified. Select a local model in Settings or set MODEL_NAME in .env.",
-                status_code=400,
-            )
+            selected_model = await self._auto_detect_model()
 
         url = f"{self.base_url}/api/chat"
         payload: dict[str, Any] = {
             "model": selected_model,
             "messages": messages,
             "stream": False,
+            "think": False,  # <--- DISBLES DEEP REASONING / CHAIN OF THOUGHT
             "options": {
                 "num_ctx": 4096,
             },
@@ -7410,6 +7709,19 @@ class StandardizedLLMOutput(BaseModel):
     validation_warnings: list[str] = Field(default_factory=list)
 
 
+class ToolTrace(BaseModel):
+    step: int
+    tool: str
+    arguments: dict[str, Any] = Field(default_factory=dict)
+    duration_ms: float
+    ok: bool = True
+    result_preview: str = ""
+
+
+class ToolRunRequest(BaseModel):
+    arguments: dict[str, Any] = Field(default_factory=dict)
+
+
 class SessionSummary(BaseModel):
     id: str
     title: str
@@ -7429,11 +7741,13 @@ class ChatRequest(BaseModel):
     document_id: str | None = None
     document_name: str | None = None
     ui_mode: Literal["auto", "a2ui", "text"] = "auto"
+    enable_tools: bool = True
     a2ui_action: A2uiActionPayload | None = None
     provider: str | None = None
     model: str | None = None
     pinned_model: str | None = None
     pinned_vision_model: str | None = None
+    pinned_tool_model: str | None = None
     api_key: str | None = None
     ollama_base_url: str | None = None
 
@@ -7476,6 +7790,8 @@ class ChatResponse(BaseModel):
     pinned: bool = False
     vision_used: bool = False
     document_used: bool = False
+    tools_used: bool = False
+    tool_traces: list[ToolTrace] = Field(default_factory=list)
 
 
 class ChatHistoryResponse(BaseModel):
@@ -7529,11 +7845,15 @@ from backend.models import (
     SessionListResponse,
     SessionSummary,
     StandardizedLLMOutput,
+    ToolRunRequest,
+    ToolTrace,
 )
 from backend.services.a2ui_service import ALL_BASIC_COMPONENTS, A2uiService
+from backend.services.agent_service import AgentResult, AgentService
 from backend.services.file_service import FileService, FileValidationError
 from backend.services.image_service import ImageService, ImageValidationError
 from backend.services.memory_service import MemoryService
+from backend.tools.registry import create_default_tool_registry
 
 router = APIRouter(tags=["chat"])
 
@@ -7543,11 +7863,18 @@ UPLOADS_DIR = Path(__file__).resolve().parent.parent.parent / "uploads"
 
 _pinned_free_model: str | None = None
 _pinned_vision_model: str | None = None
+_pinned_tool_model: str | None = None
 
 memory_service = MemoryService()
 image_service = ImageService(uploads_dir=UPLOADS_DIR)
 file_service = FileService(uploads_dir=UPLOADS_DIR)
 a2ui_service = A2uiService()
+tool_registry = create_default_tool_registry(
+    memory_service=memory_service,
+    file_service=file_service,
+    uploads_dir=UPLOADS_DIR,
+)
+agent_service = AgentService(tool_registry=tool_registry, max_steps=5)
 
 
 @router.get("/api/providers")
@@ -7560,6 +7887,20 @@ async def get_provider_config() -> dict[str, Any]:
         "openrouter_configured": bool(settings.openrouter_api_key),
         "supported_providers": list(SUPPORTED_PROVIDERS),
     }
+
+
+@router.get("/api/tools")
+async def list_available_tools() -> dict[str, Any]:
+    tools = tool_registry.list_tools()
+    return {"status": "ok", "count": len(tools), "tools": tools}
+
+
+@router.post("/api/tools/{tool_name}/run")
+async def run_tool_directly(tool_name: str, payload: ToolRunRequest) -> dict[str, Any]:
+    if not tool_registry.get(tool_name):
+        raise HTTPException(status_code=404, detail=f"Tool '{tool_name}' not found.")
+    result = await tool_registry.execute(tool_name, payload.arguments)
+    return {"status": "ok", "tool": tool_name, "result": result}
 
 
 @router.get("/chat/sessions", response_model=SessionListResponse)
@@ -7631,18 +7972,21 @@ async def get_pinned_model() -> dict[str, str | None]:
     return {
         "pinned_model": _pinned_free_model,
         "pinned_vision_model": _pinned_vision_model,
+        "pinned_tool_model": _pinned_tool_model,
     }
 
 
 @router.post("/chat/reset-model")
 async def reset_pinned_model() -> dict[str, str | None]:
-    global _pinned_free_model, _pinned_vision_model
+    global _pinned_free_model, _pinned_vision_model, _pinned_tool_model
     _pinned_free_model = None
     _pinned_vision_model = None
+    _pinned_tool_model = None
     return {
         "status": "ok",
         "pinned_model": None,
         "pinned_vision_model": None,
+        "pinned_tool_model": None,
     }
 
 
@@ -7731,7 +8075,7 @@ async def _parse_with_optional_repair(
 
 @router.post("/chat", response_model=ChatResponse)
 async def chat(payload: ChatRequest) -> ChatResponse:
-    global _pinned_free_model, _pinned_vision_model
+    global _pinned_free_model, _pinned_vision_model, _pinned_tool_model
 
     settings = get_settings()
     session_id = (payload.session_id or "").strip() or memory_service.create_session_id()
@@ -7784,6 +8128,8 @@ async def chat(payload: ChatRequest) -> ChatResponse:
     documents_context = memory_service.get_documents_context(session_id)
     has_document_context = bool(documents_context)
 
+    use_tools = bool(payload.enable_tools and not is_vision and active_provider == "openrouter")
+
     a2ui_system_prompt = a2ui_service.build_system_prompt(
         payload.ui_mode,
         provider=active_provider,
@@ -7792,9 +8138,20 @@ async def chat(payload: ChatRequest) -> ChatResponse:
     base_history: list[dict[str, Any]] = []
     if a2ui_system_prompt:
         base_history.append({"role": "system", "content": a2ui_system_prompt})
+    if use_tools:
+        base_history.append(
+            {
+                "role": "system",
+                "content": (
+                    "You have access to backend tools on the Oracle VM (VM status, SQLite chat DB search, "
+                    "uploaded files/documents, and a local Ollama worker). Call a tool only when needed to "
+                    "answer accurately."
+                ),
+            }
+        )
     base_history.extend(prior_messages)
 
-    async def run_inference(target_model: str | None) -> LLMResponse:
+    async def run_inference(target_model: str | None) -> AgentResult:
         if is_vision and image_data_url is not None:
             vision_history = list(base_history)
             if documents_context:
@@ -7804,25 +8161,54 @@ async def chat(payload: ChatRequest) -> ChatResponse:
                         "content": f"Uploaded document context:\n\n{documents_context}",
                     }
                 )
-            return await provider.analyze_image(
+            resp = await provider.analyze_image(
                 prompt=payload.message,
                 image_data_url=image_data_url,
                 history=vision_history,
                 model=target_model,
             )
+            return AgentResult(response=resp, tool_traces=[])
 
         if documents_context:
-            return await provider.process_document(
+            if use_tools:
+                doc_messages = [
+                    *base_history,
+                    {
+                        "role": "user",
+                        "content": (
+                            "Use the following uploaded document content to answer the user's questions accurately.\n\n"
+                            f"{documents_context}"
+                        ),
+                    },
+                    {"role": "user", "content": payload.message},
+                ]
+                return await agent_service.run(
+                    provider=provider,
+                    messages=doc_messages,
+                    model=target_model,
+                    enable_tools=True,
+                )
+            resp = await provider.process_document(
                 prompt=payload.message,
                 document_context=documents_context,
                 history=base_history,
                 model=target_model,
             )
+            return AgentResult(response=resp, tool_traces=[])
 
-        return await provider.chat(
+        if use_tools:
+            return await agent_service.run(
+                provider=provider,
+                messages=[*base_history, {"role": "user", "content": payload.message}],
+                model=target_model,
+                enable_tools=True,
+            )
+
+        resp = await provider.chat(
             messages=[*base_history, {"role": "user", "content": payload.message}],
             model=target_model,
         )
+        return AgentResult(response=resp, tool_traces=[])
 
     memory_prefixes: list[str] = []
     if payload.image_id:
@@ -7840,21 +8226,25 @@ async def chat(payload: ChatRequest) -> ChatResponse:
     if active_provider == "openrouter" and requested_model == FREE_ROUTER_MODEL:
         if is_vision:
             active_pinned = (payload.pinned_vision_model or "").strip() or _pinned_vision_model
+        elif use_tools:
+            active_pinned = (payload.pinned_tool_model or "").strip() or _pinned_tool_model
         else:
             active_pinned = (payload.pinned_model or "").strip() or _pinned_free_model
 
         target_model = active_pinned or FREE_ROUTER_MODEL
 
         try:
-            result = await run_inference(target_model)
+            agent_result = await run_inference(target_model)
         except LLMProviderError as exc:
             if target_model != FREE_ROUTER_MODEL and exc.status_code in RETRIABLE_PIN_STATUSES:
                 if is_vision:
                     _pinned_vision_model = None
+                elif use_tools:
+                    _pinned_tool_model = None
                 else:
                     _pinned_free_model = None
                 try:
-                    result = await run_inference(FREE_ROUTER_MODEL)
+                    agent_result = await run_inference(FREE_ROUTER_MODEL)
                 except LLMProviderError as retry_exc:
                     raise HTTPException(
                         status_code=retry_exc.status_code,
@@ -7863,9 +8253,12 @@ async def chat(payload: ChatRequest) -> ChatResponse:
             else:
                 raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
 
+        result = agent_result.response
         if result.model and result.model != FREE_ROUTER_MODEL:
             if is_vision:
                 _pinned_vision_model = result.model
+            elif use_tools:
+                _pinned_tool_model = result.model
             else:
                 _pinned_free_model = result.model
 
@@ -7883,6 +8276,11 @@ async def chat(payload: ChatRequest) -> ChatResponse:
             assistant_reply=standardized.text,
         )
 
+        pin_flag = bool(
+            _pinned_vision_model
+            if is_vision
+            else (_pinned_tool_model if use_tools else _pinned_free_model)
+        )
         return ChatResponse(
             reply=standardized.text,
             output=standardized,
@@ -7890,19 +8288,21 @@ async def chat(payload: ChatRequest) -> ChatResponse:
             history_length=len(updated_history),
             provider=active_provider,
             model=final_result.model,
-            pinned=bool(_pinned_vision_model if is_vision else _pinned_free_model),
+            pinned=pin_flag,
             vision_used=is_vision,
             document_used=has_document_context,
+            tools_used=bool(agent_result.tool_traces),
+            tool_traces=[ToolTrace(**t) for t in agent_result.tool_traces],
         )
 
     try:
-        result = await run_inference(requested_model or None)
+        agent_result = await run_inference(requested_model or None)
     except LLMProviderError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
 
     standardized, final_result = await _parse_with_optional_repair(
         provider=provider,
-        initial_result=result,
+        initial_result=agent_result.response,
         base_history=base_history,
         user_prompt=payload.message,
         ui_mode=payload.ui_mode,
@@ -7924,6 +8324,8 @@ async def chat(payload: ChatRequest) -> ChatResponse:
         pinned=False,
         vision_used=is_vision,
         document_used=has_document_context,
+        tools_used=bool(agent_result.tool_traces),
+        tool_traces=[ToolTrace(**t) for t in agent_result.tool_traces],
     )
 
 === END FILE ===
@@ -8460,6 +8862,116 @@ class A2uiService:
 
 === END FILE ===
 
+=== FILE: backend/services/agent_service.py ===
+import json
+import time
+from dataclasses import dataclass, field
+from typing import Any
+
+from backend.llm.base import LLMProvider, LLMResponse
+from backend.tools.registry import ToolRegistry
+
+
+@dataclass(frozen=True)
+class AgentResult:
+    response: LLMResponse
+    tool_traces: list[dict[str, Any]] = field(default_factory=list)
+
+
+class AgentService:
+    def __init__(self, tool_registry: ToolRegistry, max_steps: int = 5) -> None:
+        self.tool_registry = tool_registry
+        self.max_steps = max_steps
+
+    @staticmethod
+    def _parse_tool_arguments(raw_args: Any) -> tuple[dict[str, Any], str | None]:
+        if raw_args is None or raw_args == "":
+            return {}, None
+        if isinstance(raw_args, dict):
+            return raw_args, None
+        if isinstance(raw_args, str):
+            try:
+                parsed = json.loads(raw_args)
+                if isinstance(parsed, dict):
+                    return parsed, None
+                return {}, f"Tool arguments must be a JSON object, got {type(parsed).__name__}"
+            except json.JSONDecodeError as exc:
+                return {}, f"Invalid JSON tool arguments: {exc}"
+        return {}, f"Unsupported argument type: {type(raw_args).__name__}"
+
+    async def run(
+        self,
+        provider: LLMProvider,
+        messages: list[dict[str, Any]],
+        model: str | None = None,
+        enable_tools: bool = True,
+    ) -> AgentResult:
+        tool_schemas = self.tool_registry.openai_schemas() if enable_tools else None
+        working_messages = [dict(m) for m in messages]
+        traces: list[dict[str, Any]] = []
+        last_response: LLMResponse | None = None
+
+        for step in range(1, self.max_steps + 1):
+            last_response = await provider.chat(
+                messages=working_messages,
+                model=model,
+                tools=tool_schemas,
+            )
+
+            if not last_response.tool_calls:
+                return AgentResult(response=last_response, tool_traces=traces)
+
+            assistant_tool_msg: dict[str, Any] = {
+                "role": "assistant",
+                "content": last_response.content or "",
+                "tool_calls": last_response.tool_calls,
+            }
+            working_messages.append(assistant_tool_msg)
+
+            for idx, tc in enumerate(last_response.tool_calls):
+                call_id = str(tc.get("id") or f"call_{step}_{idx}")
+                fn_obj = tc.get("function") or {}
+                tool_name = str(fn_obj.get("name") or tc.get("name") or "").strip()
+                raw_args = fn_obj.get("arguments", tc.get("arguments"))
+
+                parsed_args, parse_err = self._parse_tool_arguments(raw_args)
+                started = time.perf_counter()
+                if parse_err:
+                    result_obj: dict[str, Any] = {"error": parse_err}
+                else:
+                    result_obj = await self.tool_registry.execute(tool_name, parsed_args)
+                duration_ms = round((time.perf_counter() - started) * 1000, 1)
+
+                serialized_result = json.dumps(result_obj, default=str)
+                traces.append(
+                    {
+                        "step": step,
+                        "tool": tool_name,
+                        "arguments": parsed_args,
+                        "duration_ms": duration_ms,
+                        "ok": "error" not in result_obj,
+                        "result_preview": serialized_result[:400],
+                    }
+                )
+
+                working_messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": call_id,
+                        "name": tool_name,
+                        "content": serialized_result,
+                    }
+                )
+
+        final_response = await provider.chat(
+            messages=working_messages,
+            model=last_response.model if last_response else model,
+            tools=None,
+        )
+        return AgentResult(response=final_response, tool_traces=traces)
+
+=== END FILE ===
+
 === FILE: backend/services/file_service.py ===
 from dataclasses import dataclass
 from pathlib import Path
@@ -8973,6 +9485,97 @@ class MemoryService:
 
 === END FILE ===
 
+=== FILE: bot/__init__.py ===
+
+=== END FILE ===
+
+=== FILE: bot/main.py ===
+#!/usr/bin/env python3
+import asyncio
+import os
+import sys
+import logging
+import httpx
+from pathlib import Path
+from dotenv import load_dotenv
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+load_dotenv(BASE_DIR / ".env")
+
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+OWNER_TELEGRAM_ID = os.getenv("OWNER_TELEGRAM_ID", "").strip()
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen3.5:9b").strip()
+OLLAMA_API_URL = os.getenv("OLLAMA_API_URL", "http://localhost:11434/api/chat").strip()
+
+logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+TELEGRAM_API = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
+
+async def query_ollama(prompt: str) -> str:
+    logger.info(f"Querying Ollama model: {OLLAMA_MODEL} with prompt: {prompt[:50]}...")
+    payload = {
+        "model": OLLAMA_MODEL,
+        "messages": [{"role": "user", "content": prompt}],
+        "stream": False,
+        "options": {"num_ctx": 4096}
+    }
+    try:
+        async with httpx.AsyncClient(timeout=300.0) as client:
+            response = await client.post(OLLAMA_API_URL, json=payload)
+            if response.status_code != 200:
+                return f"Ollama error (HTTP {response.status_code}): {response.text}"
+            data = response.json()
+            return data.get("message", {}).get("content", "Empty response.")
+    except Exception as exc:
+        logger.exception("Failed to connect to Ollama")
+        return f"Failed to reach local Ollama engine: {exc}"
+
+async def send_telegram_message(chat_id: str, text: str):
+    url = f"{TELEGRAM_API}/sendMessage"
+    payload = {"chat_id": chat_id, "text": text}
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        await client.post(url, json=payload)
+
+async def poll_telegram():
+    logger.info("Bot polling started.")
+    offset = 0
+    async with httpx.AsyncClient(timeout=35.0) as client:
+        while True:
+            try:
+                resp = await client.get(f"{TELEGRAM_API}/getUpdates?offset={offset}&timeout=30")
+                if resp.status_code != 200:
+                    await asyncio.sleep(5); continue
+                
+                for result in resp.json().get("result", []):
+                    offset = result["update_id"] + 1
+                    msg = result.get("message", {})
+                    
+                    user_id = str(msg.get("from", {}).get("id", ""))
+                    chat_id = str(msg.get("chat", {}).get("id", ""))
+                    text = msg.get("text", "").strip()
+                    
+                    if user_id != OWNER_TELEGRAM_ID:
+                        logger.warning(f"Unauthorized: {user_id}")
+                        continue
+                    
+                    if not text:
+                        logger.info("Ignoring non-text message")
+                        continue
+
+                    logger.info(f"Command received: {text}")
+                    await send_telegram_message(chat_id, "🧠 Processing...")
+                    reply = await query_ollama(text)
+                    await send_telegram_message(chat_id, reply)
+            except Exception:
+                logger.exception("Polling error")
+                await asyncio.sleep(5)
+
+if __name__ == "__main__":
+    asyncio.run(poll_telegram())
+
+=== END FILE ===
+
 === FILE: data/.gitkeep ===
 
 === END FILE ===
@@ -9034,6 +9637,25 @@ To also pull `gemma3:4b` during setup:
     source venv/bin/activate
     pip install -r requirements.txt
     sudo systemctl restart oracle-chat
+
+=== END FILE ===
+
+=== FILE: deploy/oracle-bot.service ===
+[Unit]
+Description=Oracle Quote Notification Bot
+After=network.target ollama.service
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/oracle_chat
+EnvironmentFile=/home/ubuntu/oracle_chat/.env
+ExecStart=/home/ubuntu/oracle_chat/venv/bin/python /home/ubuntu/oracle_chat/scripts/run_bot.py
+Restart=always
+RestartSec=60
+
+[Install]
+WantedBy=multi-user.target
 
 === END FILE ===
 
@@ -12192,6 +12814,75 @@ python-multipart==0.0.20
 pillow==11.1.0
 pypdf==5.1.0
 a2ui-agent-sdk==0.12.1
+
+=== END FILE ===
+
+=== FILE: scripts/quote_bot.py ===
+#!/usr/bin/env python3
+import asyncio
+import os
+import logging
+import httpx
+from datetime import datetime, timezone
+from pathlib import Path
+from dotenv import load_dotenv
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+load_dotenv(BASE_DIR / ".env")
+
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+OWNER_TELEGRAM_ID = os.getenv("OWNER_TELEGRAM_ID", "").strip()
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "gemma4:e4b-it-qat").strip()
+OLLAMA_API_URL = os.getenv("OLLAMA_API_URL", "http://localhost:11434/api/chat").strip()
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+async def get_random_quote():
+    async with httpx.AsyncClient() as client:
+        resp = await client.get("https://dummyjson.com/quotes/random")
+        return resp.json()
+
+async def summarize_with_ollama(quote_data):
+    timestamp = datetime.now(timezone.utc).isoformat()
+    quote_data["timestamp"] = timestamp
+    
+    prompt = (
+        f"You are a helpful assistant. Here is a JSON object with a quote:\n{quote_data}\n\n"
+        "Instructions:\n"
+        "1. Summarize what this quote really means in exactly 100 words.\n"
+        "2. End your summary with: 'Summary generated at: {timestamp}'\n"
+        "3. Keep the output clean and concise."
+    )
+    
+    payload = {
+        "model": OLLAMA_MODEL,
+        "messages": [{"role": "user", "content": prompt}],
+        "stream": False,
+        "options": {"num_ctx": 4096, "think": False}
+    }
+    
+    async with httpx.AsyncClient(timeout=300.0) as client:
+        resp = await client.post(OLLAMA_API_URL, json=payload)
+        return resp.json().get("message", {}).get("content", "Error summarizing.")
+
+async def notify_user(quote, summary):
+    text = f"✨ *Daily Quote Update*\n\n\"{quote['quote']}\"\n— {quote['author']}\n\n🤖 *AI Summary:*\n{summary}"
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    async with httpx.AsyncClient() as client:
+        await client.post(url, json={"chat_id": OWNER_TELEGRAM_ID, "text": text, "parse_mode": "Markdown"})
+
+async def main():
+    while True:
+        logger.info("Fetching new quote...")
+        quote = await get_random_quote()
+        summary = await summarize_with_ollama(quote)
+        await notify_user(quote, summary)
+        logger.info("Notification sent. Sleeping for 10 minutes.")
+        await asyncio.sleep(600)
+
+if __name__ == "__main__":
+    asyncio.run(main())
 
 === END FILE ===
 
